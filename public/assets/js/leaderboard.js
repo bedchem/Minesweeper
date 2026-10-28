@@ -6,82 +6,68 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentMode = 'multiplayer';
     let currentTimeRange = 'all';
 
+    function message(className, text) {
+        const div = document.createElement('div');
+        div.className = className;
+        div.textContent = text;
+        leaderboardContainer.replaceChildren(div);
+    }
+
+    function cell(className, ...content) {
+        const div = document.createElement('div');
+        div.className = `leaderboard-cell ${className}`;
+        div.append(...content);
+        return div;
+    }
+
     async function fetchAndRenderLeaderboard() {
-        leaderboardContainer.innerHTML = '<div class="leaderboard-loading">Loading Leaderboard...</div>';
-
+        message('leaderboard-loading', 'Loading Leaderboard...');
         try {
-            const response = await fetch(`/api/getLeaderboard?type=${currentMode}&timeRange=${currentTimeRange}`);
-            if (!response.ok) {
-                throw new Error('Failed to fetch leaderboard data');
-            }
-            const data = await response.json();
-
-            const playersWithUid = await Promise.all(
-                data.map(async player => {
-                    try {
-                        const statsRes = await fetch(`/api/getStats/${encodeURIComponent(player.username)}`);
-                        if (!statsRes.ok) throw new Error();
-                        const stats = await statsRes.json();
-                        return { ...player, uid: stats.uid };
-                    } catch {
-                        return { ...player, uid: null };
-                    }
-                })
-            );
-
-            renderLeaderboard(playersWithUid);
+            const params = new URLSearchParams({ type: currentMode, timeRange: currentTimeRange });
+            const response = await fetch(`/api/getLeaderboard?${params}`);
+            if (!response.ok) throw new Error('Failed to fetch leaderboard data');
+            renderLeaderboard(await response.json());
         } catch (error) {
             console.error('Leaderboard error:', error);
-            leaderboardContainer.innerHTML = '<div class="leaderboard-empty">Could not load leaderboard.</div>';
+            message('leaderboard-empty', 'Could not load leaderboard.');
         }
     }
 
-function renderLeaderboard(data) {
-    if (!data || data.length === 0) {
-        leaderboardContainer.innerHTML = '<div class="leaderboard-empty">No players on the leaderboard for this filter.</div>';
-        return;
-    }
-
-    const valueHeader = currentMode === 'multiplayer' ? 'Wins' : 'Best Time';
-
-    let tableHTML = `
-        <div class="leaderboard-table">
-            <div class="leaderboard-header">
-                <div class="leaderboard-cell rank">#</div>
-                <div class="leaderboard-cell username">Player</div>
-                <div class="leaderboard-cell value">${valueHeader}</div>
-            </div>
-    `;
-
-    data.forEach(player => {
-        let avatarImg;
-        if (player.uid) {
-            const avatarPng = `/profile_pics/${player.uid}.png?v=${Date.now()}`;
-            const avatarJpg = `/profile_pics/${player.uid}.jpg?v=${Date.now()}`;
-            
-            avatarImg = `
-                <img class="leaderboard-avatar" src="${avatarPng}" alt="avatar" 
-                    onerror="this.onerror=null; this.src='${avatarJpg}'; this.onerror=function(){this.src='/assets/images/icon.png';}">
-            `;
-        } else {
-            avatarImg = `
-                <img class="leaderboard-avatar" src="/assets/images/icon.png" alt="avatar">
-            `;
+    function renderLeaderboard(data) {
+        if (!data || data.length === 0) {
+            message('leaderboard-empty', 'No players on the leaderboard for this filter.');
+            return;
         }
-        
-        const displayValue = currentMode === 'multiplayer' ? player.value : `${player.value}s`;
-        tableHTML += `
-            <a href="/stats/${encodeURIComponent(player.username)}" class="leaderboard-row">
-                <div class="leaderboard-cell rank">${player.rank}</div>
-                <div class="leaderboard-cell username">${avatarImg}${player.username}</div>
-                <div class="leaderboard-cell value">${displayValue}</div>
-            </a>
-        `;
-    });
 
-    tableHTML += '</div>';
-    leaderboardContainer.innerHTML = tableHTML;
-}
+        const table = document.createElement('div');
+        table.className = 'leaderboard-table';
+        const header = document.createElement('div');
+        header.className = 'leaderboard-header';
+        header.append(
+            cell('rank', '#'),
+            cell('username', 'Player'),
+            cell('value', currentMode === 'multiplayer' ? 'Wins' : 'Best Time')
+        );
+        table.append(header);
+
+        for (const player of data) {
+            const avatar = document.createElement('img');
+            avatar.className = 'leaderboard-avatar';
+            avatar.alt = 'avatar';
+            avatar.src = player.uid ? `/avatar/${encodeURIComponent(player.uid)}` : '/assets/images/icon.png';
+
+            const row = document.createElement('a');
+            row.className = 'leaderboard-row';
+            row.href = `/stats/${encodeURIComponent(player.username)}`;
+            row.append(
+                cell('rank', String(player.rank)),
+                cell('username', avatar, player.username),
+                cell('value', currentMode === 'multiplayer' ? String(player.value) : `${player.value}s`)
+            );
+            table.append(row);
+        }
+        leaderboardContainer.replaceChildren(table);
+    }
 
     modeButtons.forEach(button => {
         button.addEventListener('click', () => {

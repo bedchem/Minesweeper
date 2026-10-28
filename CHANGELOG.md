@@ -93,6 +93,23 @@
 - added Admin Panel, to Control everything
 - BUG FIX | added logic to handle dead Players in the Reconnect logic, Fixed that you need to be in the correct lobby
  
+# 28.10.2026
+- BIG SECURITY UPDATE: every account action (delete, rename, profile picture, solo results) now needs a valid login, before anyone could delete or rename any user
+- fixed XSS in chat, player list, podium, leaderboard and admin panel
+- the mine field isn't sent to the players anymore (no more cheating with devtools)
+- reconnect works over the account now and not the socket id, you can't take over someone elses game anymore
+- leaving a game counts as a loss now
+- fixed server crash when someone joins during the countdown
+- fixed the solo win screen not showing up on a new best time
+- fixed solo freezing with too many mines
+- lobby error messages are finally shown
+- solo leaderboard only counts the normal 10x10 board with 15 mines
+- admin panel uses real data now (no demo data), with users, lobbies, sessions and an activity log
+- reCAPTCHA gets checked on the server (set RECAPTCHA_SECRET_LOGIN / RECAPTCHA_SECRET_REGISTER)
+- security headers, rate limits, chat spam protection
+- updated everything (express 5.3, socket.io 4.8.4, firebase-admin 14, firebase 13)
+- split the server into src/
+
 # TODO
 
     1. Quality of Life (refresh button [Lobby Browse])

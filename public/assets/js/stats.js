@@ -1,127 +1,69 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const path = window.location.pathname.split('/');
-    const showStats = path.length >= 3 && path[1] === 'stats' && path[2];
-
-    document.getElementById('landingPage').style.display = showStats ? 'none' : 'flex';
-    document.getElementById('statsView').style.display = showStats ? 'block' : 'none';
-    
     const pathSegments = window.location.pathname.split('/');
-    let profileUsername = null; 
+    const profileUsername = pathSegments.length >= 3 && pathSegments[1] === 'stats' && pathSegments[2]
+        ? decodeURIComponent(pathSegments[2])
+        : null;
 
-    if (pathSegments.length >= 3 && pathSegments[1] === 'stats') {
-        profileUsername = decodeURIComponent(pathSegments[2]);
-        document.getElementById('profileUsername').textContent = profileUsername;
-        document.getElementById('landingPage').style.display = 'none';
-        document.getElementById('statsView').style.display = 'block';
-        
-        if (profileUsername) {
-            fetchUserStats(profileUsername);
-        }
-    }
+    document.getElementById('landingPage').style.display = profileUsername ? 'none' : 'flex';
+    document.getElementById('statsView').style.display = profileUsername ? 'block' : 'none';
 
     async function fetchGlobalStats() {
         try {
             const response = await fetch('/api/getGlobalStats');
             if (!response.ok) return;
             const stats = await response.json();
-            
             document.getElementById('globalPlayers').textContent = `${stats.totalPlayers} registered Players`;
             document.getElementById('globalGames').textContent = `${stats.totalGamesPlayed} Games Played`;
             document.getElementById('globalAvgTime').textContent = `${stats.averageTime}s Average Time`;
-
         } catch (error) {
             console.error('Error fetching global stats:', error);
         }
     }
 
-    if (document.getElementById('landingPage').style.display !== 'none') {
-        fetchGlobalStats();
-    }
-
     async function fetchUserStats(username) {
         const timeRangeSelect = document.getElementById('timeRange');
         const timeRange = timeRangeSelect.value;
-        const url = `/api/getStats/${encodeURIComponent(username)}?timeRange=${timeRange}`;
-
         const timeFilterDisplay = document.getElementById('timeFilterDisplay');
-        if (timeRange !== 'all') {
-            const selectedOptionText = timeRangeSelect.options[timeRangeSelect.selectedIndex].text;
-            timeFilterDisplay.textContent = `(${selectedOptionText})`;
-        } else {
-            timeFilterDisplay.textContent = '';
-        }
+        timeFilterDisplay.textContent = timeRange !== 'all'
+            ? `(${timeRangeSelect.options[timeRangeSelect.selectedIndex].text})`
+            : '';
 
         try {
-            const response = await fetch(url);
+            const response = await fetch(`/api/getStats/${encodeURIComponent(username)}?timeRange=${encodeURIComponent(timeRange)}`);
             if (!response.ok) {
                 window.location.href = '/namenotfound';
                 return;
             }
-            
-            const stats = await response.json();
-            populateStats(stats);
+            populateStats(await response.json());
         } catch (error) {
             console.error('Error fetching stats:', error);
             showErrorAlert('User stats not found');
-            window.location.href = '/namenotfound'; 
+            window.location.href = '/namenotfound';
         }
     }
 
-    async function populateStats(stats) {
-        if (stats.uid) {
-            const avatarImg = document.getElementById('profileAvatar');
-            const avatarUrl = await getAvatarUrl(stats.uid);
-            avatarImg.src = avatarUrl;
-            avatarImg.onerror = function() {
-                this.src = '/assets/images/icon.png';
-                this.onerror = null;
-            };
-        } else {
-            const avatarImg = document.getElementById('profileAvatar');
-            avatarImg.src = '/assets/images/icon.png';
-            avatarImg.onerror = null;
-        }
+    function populateStats(stats) {
+        document.getElementById('profileUsername').textContent = stats.username || profileUsername;
+        document.getElementById('profileAvatar').src = stats.uid
+            ? `/avatar/${encodeURIComponent(stats.uid)}`
+            : '/assets/images/icon.png';
 
-        const multiplayerData = stats.multiplayer || {};
-        const singleplayerData = stats.singleplayer || {};
-        const combinedData = stats.combined || {};
-
-        const mpKeys = ['leaderboardPosition', 'winRate', 'currentWinStreak', 'bestWinStreak', 'averageTime', 'gamesPlayed', 'wins', 'losses'];
-        document.querySelectorAll('#multiplayer-stats .info-value').forEach((el, index) => {
-            el.textContent = multiplayerData[mpKeys[index]] ?? 'N/A';
-        });
-
-        const spKeys = ['leaderboardPosition', 'fastestTime', 'averageTime', 'gamesPlayed', 'completedGames', 'failedGames', 'minesHit'];
-        document.querySelectorAll('#singleplayer-stats .info-value').forEach((el, index) => {
-            el.textContent = singleplayerData[spKeys[index]] ?? 'N/A';
-        });
-
-        const cmbKeys = ['overallWinRate', 'bestTimeAnyMode', 'averageTime', 'totalGamesPlayed', 'totalWins', 'totalMinesHit', 'daysPlayed'];
-        document.querySelectorAll('#combined-stats .info-value').forEach((el, index) => {
-            el.textContent = combinedData[cmbKeys[index]] ?? 'N/A';
-        });
+        const fill = (sectionId, data, keys) => {
+            document.querySelectorAll(`#${sectionId} .info-value`).forEach((el, index) => {
+                el.textContent = data?.[keys[index]] ?? 'N/A';
+            });
+        };
+        fill('multiplayer-stats', stats.multiplayer, ['leaderboardPosition', 'winRate', 'currentWinStreak', 'bestWinStreak', 'averageTime', 'gamesPlayed', 'wins', 'losses']);
+        fill('singleplayer-stats', stats.singleplayer, ['leaderboardPosition', 'fastestTime', 'averageTime', 'gamesPlayed', 'completedGames', 'failedGames', 'minesHit']);
+        fill('combined-stats', stats.combined, ['overallWinRate', 'bestTimeAnyMode', 'averageTime', 'totalGamesPlayed', 'totalWins', 'totalMinesHit', 'daysPlayed']);
     }
 
-    async function getAvatarUrl(uid) {
-        const extensions = ['png', 'jpg'];
-        
-        for (const ext of extensions) {
-            const avatarUrl = `/profile_pics/${uid}.${ext}`;
-            try {
-                const response = await fetch(avatarUrl, { method: 'HEAD' });
-                if (response.ok) {
-                    return avatarUrl + '?v=' + Date.now();
-                }
-            } catch (error) {
-               
-            }
-        }
-        return '/assets/images/icon.png';
+    if (profileUsername) {
+        document.getElementById('profileUsername').textContent = profileUsername;
+        fetchUserStats(profileUsername);
+    } else {
+        fetchGlobalStats();
     }
-
-    const auth = firebase.auth();
-    const statusText = document.getElementById('status');
-    const usernameInput = document.getElementById('usernameInput');
 
     const modeButtons = document.querySelectorAll('.mode-btn');
     const timeRangeSelect = document.getElementById('timeRange');
@@ -160,18 +102,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    function updateStats(mode, timeRange) {
-        console.log(`Updating ${mode} stats for time range: ${timeRange}`);
-    }
-
     initStatsView();
 
     function showErrorAlert(msg) {
         showAlert(msg, 'error-notification');
-    }
-
-    function showCustomAlert(msg) {
-        showAlert(msg, 'custom-notification');
     }
 
     function showAlert(msg, type) {
@@ -262,16 +196,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    const originalToggleSearch = toggleSearch;
-    toggleSearch = async function () {
-        originalToggleSearch();
-        if (searchWrapper.classList.contains('expanded')) {
-            await fetchUsernames();
-        } else {
-            clearSuggestions();
-        }
-    };
-
     searchInput.addEventListener('input', () => {
         const query = searchInput.value.trim();
         if (!query) {
@@ -314,7 +238,9 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    searchInput.addEventListener('click', toggleSearch);
+    searchInput.addEventListener('click', () => {
+        if (!searchWrapper.classList.contains('expanded')) toggleSearch();
+    });
     searchBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleSearch();
@@ -334,7 +260,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     async function performSearch(query) {
-        console.log('Searching for:', query);
         try {
             const res = await fetch('/api/checkUsername', {
                 method: 'POST',
@@ -360,6 +285,7 @@ document.addEventListener('DOMContentLoaded', function () {
         searchWrapper.classList.toggle('expanded');
 
         if (searchWrapper.classList.contains('expanded')) {
+            fetchUsernames();
             searchInput.focus();
             searchBtn.innerHTML = '<i class="fas fa-times"></i>';
             searchBtn.classList.add('close-btn');

@@ -1,314 +1,230 @@
-document.addEventListener('DOMContentLoaded', async () => {
-  let lobbyCode = null;
-  const match = window.location.pathname.match(/\/lobby\/([A-Z0-9]+)/i);
-  if (match) lobbyCode = match[1];
+document.addEventListener('DOMContentLoaded', () => {
+  if (typeof socket === 'undefined') return;
 
+  const match = window.location.pathname.match(/\/lobby\/([A-Z0-9]{4})$/i);
+  const lobbyCode = match ? match[1].toUpperCase() : null;
+  if (!lobbyCode) return;
+
+  const messagesContainer = document.getElementById('messages-container');
+  const loadingMessage = document.getElementById('loading-message');
+  const messageInput = document.getElementById('message-input');
+  const sendButton = document.getElementById('send-button');
+  const connectionStatus = document.getElementById('connection-status');
+  const URL_PATTERN = /(https?:\/\/[^\s]+)/g;
+  const HAS_URL = /https?:\/\/[^\s]+/;
+  const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'];
   const imageCheckCache = new Map();
 
-  firebase.auth().onAuthStateChanged(function(user) {
-    if (!user) {
-      document.getElementById('connection-status').textContent = 'Not signed in';
-      document.getElementById('connection-status').className = 'connection-status disconnected';
-      return;
+  messageInput.disabled = true;
+  sendButton.disabled = true;
+
+  function setStatus(text, state) {
+    connectionStatus.textContent = text;
+    connectionStatus.className = `connection-status ${state}`;
+  }
+
+  function parseUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+    } catch {
+      return null;
     }
+  }
 
-    const username = user.displayName || 'User';
-    const uid = user.uid;
-
-    const socket = io();
-
-    const messagesContainer = document.getElementById('messages-container');
-    const messageInput = document.getElementById('message-input');
-    const sendButton = document.getElementById('send-button');
-    const connectionStatus = document.getElementById('connection-status');
-
-    function isValidUrl(string) {
-      try {
-        const url = new URL(string);
-        return url.protocol === 'http:' || url.protocol === 'https:';
-      } catch (_) {
-        return false;
-      }
-    }
-
-    async function isImageUrl(url) {
-      if (imageCheckCache.has(url)) {
-        return imageCheckCache.get(url);
-      }
-
-      try {
-        const cleanUrl = url.split('?')[0].split('#')[0];
-        const lowerUrl = cleanUrl.toLowerCase();
-        
-        const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'];
-        const hasImageExtension = imageExtensions.some(ext => lowerUrl.endsWith(ext));
-        
-        if (hasImageExtension) {
-          imageCheckCache.set(url, true);
-          return true;
-        }
-
-        const result = await new Promise((resolve) => {
+  function isImageUrl(value) {
+    if (imageCheckCache.has(value)) return imageCheckCache.get(value);
+    const url = parseUrl(value);
+    const check = !url
+      ? Promise.resolve(false)
+      : IMAGE_EXTENSIONS.some((ext) => url.pathname.toLowerCase().endsWith(ext))
+        ? Promise.resolve(true)
+        : new Promise((resolve) => {
           const img = new Image();
+          img.referrerPolicy = 'no-referrer';
           img.onload = () => resolve(true);
           img.onerror = () => resolve(false);
-          img.src = url;
-          
           setTimeout(() => resolve(false), 2000);
+          img.src = url.href;
         });
+    imageCheckCache.set(value, check);
+    return check;
+  }
 
-        imageCheckCache.set(url, result);
-        return result;
-        
-      } catch (error) {
-        console.log('Image check failed for:', url, error);
-        imageCheckCache.set(url, false);
-        return false;
+  async function validateMessage(message) {
+    for (const url of message.match(URL_PATTERN) || []) {
+      if (!parseUrl(url)) return { valid: false, error: 'Invalid URL format' };
+      if (!(await isImageUrl(url))) return { valid: false, error: 'Only image URLs are allowed' };
+    }
+    return { valid: true };
+  }
+
+  function fillMessage(bubble, message) {
+    for (const part of message.split(URL_PATTERN)) {
+      if (!part) continue;
+      if (!HAS_URL.test(part)) {
+        bubble.append(part);
+        continue;
       }
+      const placeholder = document.createElement('span');
+      placeholder.textContent = part;
+      bubble.append(placeholder);
+      isImageUrl(part).then((isImage) => {
+        if (!isImage) return;
+        const img = document.createElement('img');
+        img.src = parseUrl(part).href;
+        img.alt = 'User Image';
+        img.className = 'chat-image';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        img.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;margin:5px 0;';
+        placeholder.replaceWith(img);
+      });
+    }
+  }
+
+  function renderMessage(data) {
+    const element = document.createElement('div');
+    if (data.type === 'system') {
+      element.className = 'system-message';
+      element.textContent = data.message;
+      return element;
     }
 
-    async function replaceImageLinks(message) {
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const urls = message.match(urlRegex);
-      
-      if (!urls) return message;
+    const ownUid = myId || firebase.auth().currentUser?.uid;
+    const isOwn = Boolean(data.uid) && data.uid === ownUid;
+    element.className = `message ${isOwn ? 'own' : 'other'}`;
 
-      let processedMessage = message;
-      
-      for (const url of urls) {
-        const isImage = await isImageUrl(url);
-        if (isImage) {
-          processedMessage = processedMessage.replace(
-            url, 
-            `<img src="${url}" alt="User Image" class="chat-image" loading="lazy" style="max-width:200px;max-height:200px;border-radius:8px;margin:5px 0;">`
-          );
-        }
-      }
-      
-      return processedMessage;
-    }
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;align-items:flex-start;${isOwn ? 'justify-content:flex-end;' : ''}`;
+    const avatar = document.createElement('img');
+    avatar.className = 'chat-avatar';
+    avatar.src = data.uid ? `/avatar/${encodeURIComponent(data.uid)}` : '/assets/images/icon.png';
+    avatar.alt = 'avatar';
+    avatar.style.cssText = 'width:32px;height:32px;border-radius:50%;object-fit:cover;margin-right:8px;';
 
-    async function validateMessage(message) {
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const urls = message.match(urlRegex);
-      
-      if (!urls) return { valid: true };
+    const body = document.createElement('div');
+    body.style.cssText = 'flex:1;max-width: calc(100% - 40px);';
+    const sender = document.createElement('div');
+    sender.className = 'message-sender';
+    sender.textContent = isOwn ? 'You' : data.username;
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
+    fillMessage(bubble, String(data.message ?? ''));
+    const time = document.createElement('div');
+    time.className = 'message-time';
+    time.textContent = new Date(data.timestamp).toLocaleTimeString();
+    body.append(sender, bubble, time);
 
-      for (const url of urls) {
-        if (!isValidUrl(url)) {
-          return { 
-            valid: false, 
-            error: 'Invalid URL format' 
-          };
-        }
+    if (isOwn) row.append(body, avatar);
+    else row.append(avatar, body);
+    element.append(row);
+    return element;
+  }
 
-        const isImage = await isImageUrl(url);
-        if (!isImage) {
-          return { 
-            valid: false, 
-            error: 'Only image URLs are allowed' 
-          };
-        }
-      }
+  function showError(message) {
+    document.querySelector('.message-error')?.remove();
+    messageInput.style.opacity = '0';
+    messageInput.style.transform = 'translateY(10px)';
+    sendButton.style.opacity = '0';
+    sendButton.style.transform = 'translateY(10px)';
 
-      return { valid: true };
-    }
-
-    function showError(message) {
-      const existingError = document.querySelector('.message-error');
-      if (existingError) {
-        existingError.remove();
-      }
-
-      messageInput.style.opacity = '0';
-      messageInput.style.transform = 'translateY(10px)';
-      sendButton.style.opacity = '0';
-      sendButton.style.transform = 'translateY(10px)';
-      
-      setTimeout(() => {
-        const errorElement = document.createElement('div');
-        errorElement.className = 'message-error';
-        errorElement.textContent = message;
-        errorElement.style.cssText = `
-          color: #ff4444;
-          background: #841022ff;
-          border: 1px solid #3f0006ff;
-          border-radius: 8px;
-          padding: 8px 12px;
-          margin: 5px 0;
-          font-size: 14px;
-          text-align: center;
-          animation: fadeIn 0.3s ease-in;
-        `;
-
-        messageInput.parentNode.insertBefore(errorElement, messageInput.nextSibling);
-
-        setTimeout(() => {
-          if (errorElement.parentNode) {
-            errorElement.remove();
-          }
-          
-          messageInput.style.opacity = '1';
-          messageInput.style.transform = 'translateY(0)';
-          sendButton.style.opacity = '1';
-          sendButton.style.transform = 'translateY(0)';
-          
-        }, 2000);
-        
-      }, 300);
-    }
-
-    async function sendMessage() {
-      const message = messageInput.value.trim();
-      if (!message) return;
-
-      const validation = await validateMessage(message);
-      
-      if (!validation.valid) {
-        showError(validation.error);
-        return;
-      }
-
-      socket.emit('lobbyChatMessage', { lobby: lobbyCode, message, username, uid });
-      messageInput.value = '';
-
-      const event = new CustomEvent('messageSent', { detail: { message } });
-      document.dispatchEvent(event);
-    }
-
-    if (!document.querySelector('#chat-styles')) {
-      const style = document.createElement('style');
-      style.id = 'chat-styles';
-      style.textContent = `
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .chat-image {
-          transition: transform 0.2s ease;
-        }
-        
-        .chat-image:hover {
-          transform: scale(1.02);
-        }
-        
-        .message-error {
-          animation: fadeIn 0.3s ease-in !important;
-        }
-        
-        #message-input, #send-button {
-          transition: all 0.3s ease-in-out;
-        }
+    setTimeout(() => {
+      const errorElement = document.createElement('div');
+      errorElement.className = 'message-error';
+      errorElement.textContent = message;
+      errorElement.style.cssText = `
+        color: #ff4444;
+        background: #841022ff;
+        border: 1px solid #3f0006ff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin: 5px 0;
+        font-size: 14px;
+        text-align: center;
+        animation: fadeIn 0.3s ease-in;
       `;
-      document.head.appendChild(style);
-    }
-
-    socket.on('connect', () => {  
-      connectionStatus.textContent = 'Connected';
-      connectionStatus.className = 'connection-status connected';
-      socket.emit('lobbyChatJoin', { lobby: lobbyCode, username, uid });
-    });
-
-    socket.on('lobbyChatJoined', () => {
-      messageInput.disabled = false;
-      sendButton.disabled = false;
-      messageInput.focus();
-      document.getElementById('loading-message').style.display = 'none';
-    });
-
-    socket.on('lobbyChatMessage', async (data) => {
-      const isOwn = (data.uid && uid && data.uid === uid);
-
-      const messageElement = document.createElement('div');
-      if (data.type === 'system') {
-        messageElement.className = 'system-message';
-        messageElement.textContent = data.message;
-      } else {
-        messageElement.className = 'message' + (isOwn ? ' own' : ' other');
-        let avatarUrl = '/assets/images/icon.png';
-        if (data.uid) {
-          avatarUrl = `/profile_pics/${data.uid}.png?v=${Date.now()}`;
-        }
-        const imgTag = `<img class="chat-avatar" 
-                    src="${avatarUrl}" 
-                    alt="avatar" 
-                    onerror="this.onerror=null;this.src='../assets/images/icon.png';" 
-                    style="width:32px;height:32px;border-radius:50%;object-fit:cover;margin-right:8px;">`;
-
-        let processedMessage = data.message;
-        
-        if (data.message.match(/(https?:\/\/[^\s]+)/g)) {
-          try {
-            processedMessage = await replaceImageLinks(data.message);
-          } catch (error) {
-            console.error('Error processing image links:', error);
-          }
-        }
-
-        messageElement.innerHTML = isOwn
-          ? `
-              <div style="display:flex;align-items:flex-start;justify-content:flex-end;">
-                <div style="flex:1;max-width: calc(100% - 40px);">
-                  <div class="message-sender">You</div>
-                  <div class="message-bubble">${processedMessage}</div>
-                  <div class="message-time">${new Date(data.timestamp).toLocaleTimeString()}</div>
-                </div>
-                ${imgTag}
-              </div>
-            `
-          : `
-              <div style="display:flex;align-items:flex-start;">
-                ${imgTag}
-                <div style="flex:1;max-width: calc(100% - 40px);">
-                  <div class="message-sender">${data.username}</div>
-                  <div class="message-bubble">${processedMessage}</div>
-                  <div class="message-time">${new Date(data.timestamp).toLocaleTimeString()}</div>
-                </div>
-              </div>
-            `;
-      }
-      messagesContainer.appendChild(messageElement);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    });
-
-    sendButton.addEventListener('click', sendMessage);
-
-    messageInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        sendMessage();
-      }
-    });
-
-    messageInput.addEventListener('input', async () => {
-      const message = messageInput.value.trim();
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const urls = message.match(urlRegex);
-      
-      if (urls && urls.length > 0) {
-        const validation = await validateMessage(message);
-        
-        if (!validation.valid) {
-          messageInput.style.borderColor = '#ff4444';
-          sendButton.disabled = true;
-          sendButton.style.opacity = '0.5';
-        } else {
-          messageInput.style.borderColor = '';
-          sendButton.disabled = false;
-          sendButton.style.opacity = '1';
-        }
-      } else {
-        messageInput.style.borderColor = '';
-        sendButton.disabled = false;
+      messageInput.parentNode.insertBefore(errorElement, messageInput.nextSibling);
+      setTimeout(() => {
+        errorElement.remove();
+        messageInput.style.opacity = '1';
+        messageInput.style.transform = 'translateY(0)';
         sendButton.style.opacity = '1';
-      }
-    });
+        sendButton.style.transform = 'translateY(0)';
+      }, 2000);
+    }, 300);
+  }
 
-    socket.on('disconnect', () => {
-      connectionStatus.textContent = 'Disconnected';
-      connectionStatus.className = 'connection-status disconnected';
-      messageInput.disabled = true;
-      sendButton.disabled = true;
-    });
+  async function sendMessage() {
+    const message = messageInput.value.trim();
+    if (!message) return;
+    const validation = await validateMessage(message);
+    if (!validation.valid) return showError(validation.error);
+    socket.emit('lobbyChatMessage', { lobby: lobbyCode, message });
+    messageInput.value = '';
+    document.dispatchEvent(new CustomEvent('messageSent', { detail: { message } }));
+  }
+
+  if (!document.getElementById('chat-styles')) {
+    const style = document.createElement('style');
+    style.id = 'chat-styles';
+    style.textContent = `
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .chat-image { transition: transform 0.2s ease; }
+      .chat-image:hover { transform: scale(1.02); }
+      .message-error { animation: fadeIn 0.3s ease-in !important; }
+      #message-input, #send-button { transition: all 0.3s ease-in-out; }
+    `;
+    document.head.append(style);
+  }
+
+  firebase.auth().onAuthStateChanged((user) => {
+    if (!user) setStatus('Not signed in', 'disconnected');
+  });
+
+  function joinChat() {
+    setStatus('Connected', 'connected');
+    messagesContainer.replaceChildren(loadingMessage);
+    loadingMessage.style.display = '';
+    socket.emit('lobbyChatJoin', { lobby: lobbyCode });
+  }
+
+  socket.on('connect', joinChat);
+  if (socket.connected) joinChat();
+
+  socket.on('lobbyChatJoined', () => {
+    messageInput.disabled = false;
+    sendButton.disabled = false;
+    messageInput.focus();
+    loadingMessage.style.display = 'none';
+  });
+
+  socket.on('lobbyChatMessage', (data) => {
+    messagesContainer.append(renderMessage(data));
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  });
+
+  socket.on('lobbyChatError', showError);
+
+  socket.on('disconnect', () => {
+    setStatus('Disconnected', 'disconnected');
+    messageInput.disabled = true;
+    sendButton.disabled = true;
+  });
+
+  sendButton.addEventListener('click', sendMessage);
+  messageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) sendMessage();
+  });
+
+  messageInput.addEventListener('input', async () => {
+    const message = messageInput.value.trim();
+    const valid = !HAS_URL.test(message) || (await validateMessage(message)).valid;
+    messageInput.style.borderColor = valid ? '' : '#ff4444';
+    sendButton.disabled = !valid;
+    sendButton.style.opacity = valid ? '1' : '0.5';
   });
 });

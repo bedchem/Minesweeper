@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Stats</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha384-nRgPTkuX86pH8yjPJUAFuASXQSSl2/bBUiNV47vSYpKFxHJhbcrGnmlYpYJMeD7a" crossorigin="anonymous">
   <link rel="stylesheet" href="/assets/css/style.css" />
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-app-compat.js" integrity="sha384-yv+ZUv/KyryBDNR7YidkLtr/oFDx0uwomSfUCO6neJglg17CDzXceDp8+BdqbvkD" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-auth-compat.js" integrity="sha384-DCSLUn2bWnL7yjZ+41b+hX4KdGS4F4auH9Q8zTeRYxSeGJPCc9QgCI4/buENd5Fp" crossorigin="anonymous"></script>
   <script src="/assets/js/firebase-auth.js"></script>
 </head>
 <body>
@@ -17,7 +17,7 @@
     </a>    <div class="header-subtitle">MINESWEEPER selection</div>
 <div class="user-menu-wrapper" id="userMenuWrapper">
     <div class="user-icon" id="userIcon" style="display:none;">
-        <img id="headerAvatar" src="./assets/images/icon.png" alt="avatar" style="margin-top:0px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+        <img id="headerAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:0px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
         <i id="headerAvatarFallback" style="font-size:36px;"></i>
     </div>
     <div class="user-dropdown" id="userDropdown">
@@ -25,7 +25,7 @@
             <p class="dropdown-signed">Signed in as</p>
             <div class="dropdown-user">
                 <div class="dropdown-avatar">
-                    <img id="dropdownAvatar" src="./assets/images/icon.png" alt="avatar" style="margin-top:50px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+                    <img id="dropdownAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:50px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
                 </div>
                 <p class="dropdown-email" id="dropdownEmail" style="margin-top:50px;"></p>
             </div>
@@ -320,23 +320,14 @@
     </div>
   </div>
 
-  <button id="backButton" class="Btn-Container" onclick="
-    const forbiddenPages = ['lobby', 'register', 'login'];
-    const referrer = document.referrer;
-    const referrerPage = referrer.substring(referrer.lastIndexOf('/') + 1);
-    if (!forbiddenPages.includes(referrerPage)) {
-      window.history.back();
-    } else {
-      window.location.href = '/';
-    }
-  ">
+  <button id="backButton" class="Btn-Container">
     <span class="text">Back!</span>
     <span class="icon-Container">
     <svg
       width="16"
       height="19"
       viewBox="0 0 16 19"
-      fill="nones"
+      fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
       <circle cx="1.61321" cy="1.61321" r="1.5" fill="black"></circle>

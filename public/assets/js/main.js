@@ -1,22 +1,28 @@
-const socket = io();
-let startTime;
-let playerStatus = 'alive';
-const urlParams = new URLSearchParams(window.location.search);
-const errorParam = urlParams.get('error');
-const codeParam = urlParams.get('code');
-let spectateTimerInterval;
-let timerInterval;
-let disconnectModalInterval;
-let disconnectCountdown = 10;
-let cols, rows;
 
+const socket = io({
+  autoConnect: false,
+  auth: (cb) => {
+    const user = firebase.auth().currentUser;
+    if (!user) return cb({});
+    user.getIdToken().then((token) => cb({ token }), () => cb({}));
+  }
+});
+
+let username = null;
+let myId = null;
+let rows = 0;
+let cols = 0;
+let cellEls = [];
+let playerStatus = 'alive';
 let spectating = false;
 let spectatedPlayerId = null;
 let alivePlayers = [];
-let leftMouseDown = false;
-let rightMouseDown = false;
+let spectateTimerInterval = null;
+let disconnectModalInterval = null;
+let disconnectCountdown = 10;
+const playerNames = new Map();
 
-let gameTimer = {
+const gameTimer = {
   startTime: null,
   pauseStart: null,
   pausedDuration: 0,
@@ -25,388 +31,267 @@ let gameTimer = {
   isPaused: false
 };
 
-let username = null;
-const name = null;
-
-function waitForUsername() {
-  return new Promise(resolve => {
-    if (username) {
-      resolve(username);
-    } else {
-      socket.once('authInitSuccess', ({ name }) => {
-        username = name;
-        resolve(username);
-      });
-    }
-  });
-}
-
-firebase.auth().onAuthStateChanged(async (user) => {
-  if (!user) return;
-  const token = await user.getIdToken();
-  socket.emit('authInit', { token });
-});
-
-const getNeighbors = (x, y) => {
-  const n = [];
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const nx = x + dx, ny = y + dy;
-      if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) n.push([nx, ny]);
-    }
-  }
-  return n;
+const LOBBY_ERRORS = {
+  'Lobby not found': 'lobby_not_found',
+  'Lobby full': 'lobby_full',
+  'Name taken': 'name_taken',
+  'Game in progress': 'game_in_progress',
+  'Lobby closed': 'lobby_closed'
 };
 
-const countFlagsAround = (x, y) =>
-  getNeighbors(x, y).reduce((c, [nx, ny]) => {
-    const cell = document.querySelector(`[data-x="${nx}"][data-y="${ny}"]`);
-    return c + (cell && cell.classList.contains('flagged') ? 1 : 0);
-  }, 0);
+const LOBBY_ERROR_TEXT = {
+  lobby_not_found: (code) => (code ? `Lobby ${code} not found` : 'Lobby not found'),
+  lobby_full: () => 'Lobby is full',
+  name_taken: () => 'Name is already taken in this lobby',
+  game_in_progress: () => 'This game has already started',
+  lobby_closed: () => 'The lobby was closed'
+};
 
-socket.on('chordHighlight', ({ cells }) => {
-  document.querySelectorAll('.chord-highlight').forEach(c => c.classList.remove('chord-highlight'));
-  cells.forEach(({ x, y }) => {
-    const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-    if (cell && !cell.classList.contains('revealed') && !cell.classList.contains('flagged')) {
-      cell.classList.add('chord-highlight');
-    }
-  });
+const isLobbyCreationPage = /^\/lobbycreation(\.html)?\/?$/.test(window.location.pathname);
+const isLobbyPage = window.location.pathname.startsWith('/lobby/');
+
+const validateCode = (code) => /^[A-Z0-9]{4}$/.test(code);
+const avatarUrl = (uid) => (uid ? `/avatar/${encodeURIComponent(uid)}` : '/assets/images/icon.png');
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function notify(message, type = 'error') {
+  if (typeof showCustomAlert === 'function') showCustomAlert(message, type);
+  else console.warn(message);
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+socket.on('authInitSuccess', ({ name, uid }) => {
+  username = name;
+  myId = uid;
 });
 
-function startTimer() {
-  stopTimer();
-  gameTimer.startTime = Date.now();
-  gameTimer.pausedDuration = 0;
-  gameTimer.penaltySeconds = 0;
-  gameTimer.isPaused = false;
-  gameTimer.interval = setInterval(updateTimerDisplay, 1000);
-  updateTimerDisplay();
+function waitForUsername() {
+  if (username) return Promise.resolve(username);
+  return new Promise((resolve) => socket.once('authInitSuccess', ({ name }) => resolve(name)));
 }
 
-function pauseTimer() {
-  if (gameTimer.isPaused || playerStatus !== 'alive') return;
-  clearInterval(gameTimer.interval);
-  gameTimer.pauseStart = Date.now();
-  gameTimer.isPaused = true;
-}
-
-function resumeTimer() {
-  if (!gameTimer.isPaused || playerStatus !== 'alive') return;
-  if (gameTimer.pauseStart) {
-    gameTimer.pausedDuration += Date.now() - gameTimer.pauseStart;
-    gameTimer.pauseStart = null;
-  }
-  gameTimer.isPaused = false;
-  gameTimer.interval = setInterval(updateTimerDisplay, 1000);
-  updateTimerDisplay();
-}
-
-function stopTimer() {
-  clearInterval(gameTimer.interval);
-  gameTimer.interval = null;
-  updateTimerDisplay();
-}
-
-function updateTimerDisplay() {
-  const timerEl = document.getElementById('gameTimer');
-  if (!timerEl) return;
-  
-  let elapsedSeconds = 0;
-  if (gameTimer.startTime) {
-    const now = Date.now();
-    let rawTime = now - gameTimer.startTime;
-    
-    // Pausierte Zeit abziehen
-    if (gameTimer.pausedDuration) {
-      rawTime -= gameTimer.pausedDuration;
-    }
-    
-    elapsedSeconds = Math.max(0, Math.floor(rawTime / 1000));
-  }
-  
-  timerEl.innerHTML = `Time: ${elapsedSeconds}s${
-    gameTimer.penaltySeconds > 0
-      ? `<span class="penalty-display">+${gameTimer.penaltySeconds}</span>`
-      : ''
-  }`;
-}
-
-socket.on('reconnectGameData', (data) => {
-  console.log("Reconnect game data received", data);
-  reconnectGameHandler(data);
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-  const backButtonIndex = document.getElementById('backButtonIndex');
-  if (backButtonIndex) {
-    backButtonIndex.onclick = () => window.location.href = '/';
-  }
-  const backButton = document.getElementById('backButton');
-  if (backButton) {
-    backButton.onclick = () => {
-      window.location.href = '/lobbycreation';
-    };
-  }
-});
-
-const validateCode = (code) => code.length === 4 && /^[A-Z0-9]+$/.test(code);
-
-if (errorParam) {
-  const codeError = document.getElementById('codeError');
-  if (codeError) {
-    if (errorParam === 'lobby_not_found' && codeParam) {
-      codeError.textContent = `Lobby ${codeParam} not found`;
-    } else if (errorParam === 'lobby_full') {
-      codeError.textContent = `Lobby is full`;
-    } else if (errorParam === 'name_taken') {
-      codeError.textContent = `Name is already taken in this lobby`;
-    }
-    window.history.replaceState({}, document.title, window.location.pathname);
-  }
-}
-
-if (window.location.pathname === '/lobbycreation') {
-  document.addEventListener('DOMContentLoaded', () => {
-    const createBtn = document.getElementById('createLobby');
-    const joinBtn = document.getElementById('joinLobby');
-    const codeInput = document.getElementById('lobbyCode');
-    const codeError = document.getElementById('codeError');
-
-    socket.on('lobbyCreated', (code) => {
-      window.location.href = `/lobby/${code}`;
-    });
-
-    codeInput.addEventListener('input', function(e) {
-      this.value = this.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase();
-      codeError.textContent = '';
-    });
-
-    document.getElementById('browseLobbies').addEventListener('click', () => {
-      fetch('/api/lobbies')
-        .then(response => response.json())
-        .then(lobbies => {
-          const modal = document.getElementById('lobbyBrowserModal');
-          const list = document.getElementById('lobbyList');
-          const noLobbiesMessage = document.getElementById('noLobbiesMessage');
-          list.innerHTML = '';
-          if (lobbies.length === 0) {
-            noLobbiesMessage.style.display = 'block';
-            list.style.display = 'none';
-          } else {
-            noLobbiesMessage.style.display = 'none';
-            list.style.display = 'block';
-            lobbies.forEach(lobby => {
-              const lobbyItem = document.createElement('div');
-              lobbyItem.className = 'lobby-item';
-              lobbyItem.dataset.code = lobby.code;
-              lobbyItem.innerHTML = `
-                <div class="lobby-host">Host: ${lobby.host}</div>
-                <div class="lobby-players">Players: ${lobby.players}/${lobby.maxPlayers}</div>
-                <div class="lobby-difficulty">Difficulty: ${lobby.difficulty}</div>
-                <div class="lobby-code">Code: ${lobby.code}</div>
-                <button class="join-lobby-btn">Join</button>
-              `;
-              list.appendChild(lobbyItem);
-              lobbyItem.querySelector('.join-lobby-btn').addEventListener('click', async (e) => {
-                const name = await waitForUsername();
-                window.location.href = `/lobby/${lobby.code}`;
-              });
-            });
-          }
-          modal.classList.add('visible');
-        })
-        .catch(error => {
-          console.error('Error fetching lobbies:', error);
-          document.getElementById('lobbyList').innerHTML = '';
-          document.getElementById('noLobbiesMessage').style.display = 'none';
-          const errorElement = document.createElement('div');
-          errorElement.className = 'error';
-          errorElement.textContent = 'Failed to load lobbies';
-          document.getElementById('lobbyList').appendChild(errorElement);
-        });
-    });
-
-    document.getElementById('closeLobbyBrowser').addEventListener('click', () => {
-      document.getElementById('lobbyBrowserModal').classList.remove('visible');
-    });
-
-    document.getElementById('createLobby').addEventListener('click', () => {
-      document.getElementById('difficultyModal').classList.add('visible');
-    });
-
-    document.getElementById('exitmodalD').addEventListener('click', () => {
-      document.getElementById('difficultyModal').classList.remove('visible');
-    });
-
-    document.getElementById('confirmCreate').addEventListener('click', async () => {
-      const difficulty = document.getElementById('difficultySelect').value;
-      const playerCount = parseInt(document.getElementById('playerCount').value);
-      const name = await waitForUsername();
-      console.log("Creating lobby with  name:", name);
-      socket.emit('createLobby', { difficulty, playerCount, name });
-      document.getElementById('difficultyModal').classList.remove('visible');
-    });
-
-    createBtn.addEventListener('click', async () => {
-      const name = await waitForUsername();
-      console.log("Creating lobby2 with  name:", name);
-      localStorage.setItem("playerName", name);
-      document.getElementById('difficultyModal').classList.add('visible');
-    });
-
-    joinBtn.onclick = () => {
-      const code = codeInput.value.trim().toUpperCase();
-      let hasError = false;
-      if (!validateCode(code)) {
-        codeError.textContent = "Code must be 4 characters (A-Z, 0-9)";
-        hasError = true;
-      }
-      if (hasError) return;
-      localStorage.setItem("playerName", name);
-      window.location.href = `/lobby/${code}`;
-    };
-  });
-}
-
-if (window.location.pathname.startsWith('/lobby/')) {
-  (async () => {
-    spectating = false;
-    spectatedPlayerId = null;
-    alivePlayers = [];
-    playerStatus = 'alive';
-    clearInterval(spectateTimerInterval);
-    clearInterval(timerInterval);
-    const code = window.location.pathname.split('/').pop().toUpperCase();
-    const name = await waitForUsername();
-    console.log("Creating lobby3 with  name:", name);
-    document.getElementById('readyUp').onclick = () => socket.emit('readyUp');
-    const codeDisplay = document.getElementById('lobbyCodeDisplay');
-    if (codeDisplay) {
-      codeDisplay.textContent = code;
-      codeDisplay.addEventListener('click', () => {
-        navigator.clipboard.writeText(code);
-        codeDisplay.classList.add('copied');
-        setTimeout(() => codeDisplay.classList.remove('copied'), 800);
-      });
-    }
-    socket.emit('joinLobby', { code, name });
-  })();
-}
-
-socket.on('lobbyError', handleLobbyError);
-socket.on('updateUsers', updatePlayerList);
-socket.on('countdown', handleCountdown);
-socket.on('userLeft', handleUserLeft);
-socket.on('startGame', startGameHandler);
-socket.on('intermediatePodium', handleIntermediatePodium);
-socket.on('gameUpdate', handleGameUpdate);
-socket.on('playerFailed', handlePlayerFailed);
-socket.on('flagUpdate', handleFlagUpdate);
-socket.on('progressUpdate', handleProgressUpdate);
-socket.on('gameOver', handleGameOver);
-socket.on('playerStatusChanged', handlePlayerStatusChanged);
-socket.on('spectateUpdate', handleSpectateUpdate);
-socket.on('gamePaused', handleGamePaused);
-socket.on('gameResumed', handleGameResumed);
-socket.on('playerDisconnected', handlePlayerDisconnected);
-socket.on('reconnectGameData', reconnectGameHandler);
-
-socket.on('connect', async () => {
-  const inGameSocketId = localStorage.getItem('inGameSocketId');
-  const prevLobbyCode = localStorage.getItem('lobbyCode');
-  const code = window.location.pathname.split('/').pop().toUpperCase();
-  const name = await waitForUsername();
-  
-  // Reset reconnect if player joins a different lobby
-  if (prevLobbyCode && code !== prevLobbyCode) {
-    localStorage.removeItem('inGameSocketId');
-    localStorage.removeItem('lobbyCode');
-    const readyBtn = document.getElementById('readyUp');
-    if (readyBtn) {
-      readyBtn.textContent = 'Ready Up';
-      readyBtn.disabled = false;
-      readyBtn.onclick = () => socket.emit('readyUp');
-    }
-  } else
-
-  if (inGameSocketId && code && name && validateCode(code)) {
-    console.log("Reconnect check with ID:", inGameSocketId);
-    socket.emit('checkPlayerStatus', { playerId: inGameSocketId }, (inGame) => {
-      const readyBtn = document.getElementById('readyUp');
-      if (!readyBtn) return;
-      if (inGame) {
-        readyBtn.textContent = 'Reconnect';
-        readyBtn.disabled = false;
-        readyBtn.onclick = () => {
-          socket.emit('playerReconnected', { oldId: inGameSocketId });
-          socket.emit('requestReconnectGameData');
-          readyBtn.disabled = true;
-        };
-      } else {
-        localStorage.removeItem('inGameSocketId');
-        localStorage.removeItem('lobbyCode');
-        readyBtn.textContent = 'Ready Up';
-        readyBtn.disabled = false;
-        readyBtn.onclick = () => socket.emit('readyUp');
-      }
-    });
+firebase.auth().onAuthStateChanged((user) => {
+  if (user) {
+    if (!socket.active) socket.connect();
   } else {
-    const readyBtn = document.getElementById('readyUp');
-    if (readyBtn) {
-      readyBtn.textContent = 'Ready Up';
-      readyBtn.disabled = false;
-      readyBtn.onclick = () => socket.emit('readyUp');
-    }
+    socket.disconnect();
   }
 });
 
-socket.on('inGameStatus', (isInGame) => {
+socket.on('connect_error', (err) => {
+  console.error('Socket connection failed:', err.message);
+  if (socket.active) return;
+  notify(err.message === 'User data not found'
+    ? 'Your account data was not found. Please log in again.'
+    : 'Could not connect to the game server. Please reload the page.');
+});
+
+socket.on('sessionReplaced', () => notify('This lobby was opened in another tab.', 'info'));
+
+function showLobbyErrorFromUrl(codeError) {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get('error');
+  if (!error || !codeError) return;
+  const code = (params.get('code') || '').toUpperCase();
+  const text = LOBBY_ERROR_TEXT[error];
+  if (text) codeError.textContent = text(validateCode(code) ? code : '');
+  window.history.replaceState({}, document.title, window.location.pathname);
+}
+
+function renderLobbyBrowser(lobbies) {
+  const list = document.getElementById('lobbyList');
+  const noLobbiesMessage = document.getElementById('noLobbiesMessage');
+  list.replaceChildren();
+  noLobbiesMessage.style.display = lobbies.length === 0 ? 'block' : 'none';
+  list.style.display = lobbies.length === 0 ? 'none' : 'block';
+
+  for (const lobby of lobbies) {
+    const item = el('div', 'lobby-item');
+    item.dataset.code = lobby.code;
+    item.append(
+      el('div', 'lobby-host', `Host: ${lobby.host}`),
+      el('div', 'lobby-players', `Players: ${lobby.players}/${lobby.maxPlayers}`),
+      el('div', 'lobby-difficulty', `Difficulty: ${lobby.difficulty}`),
+      el('div', 'lobby-code', `Code: ${lobby.code}`)
+    );
+    const join = el('button', 'join-lobby-btn', 'Join');
+    join.addEventListener('click', () => {
+      window.location.href = `/lobby/${encodeURIComponent(lobby.code)}`;
+    });
+    item.append(join);
+    list.append(item);
+  }
+}
+
+function initLobbyCreationPage() {
+  const codeInput = document.getElementById('lobbyCode');
+  const codeError = document.getElementById('codeError');
+  const difficultyModal = document.getElementById('difficultyModal');
+  const browserModal = document.getElementById('lobbyBrowserModal');
+  const playerCountInput = document.getElementById('playerCount');
+
+  showLobbyErrorFromUrl(codeError);
+
+  socket.on('lobbyCreated', (code) => {
+    window.location.href = `/lobby/${encodeURIComponent(code)}`;
+  });
+  socket.on('lobbyError', (message) => {
+    codeError.textContent = message;
+  });
+
+  codeInput.addEventListener('input', () => {
+    codeInput.value = codeInput.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase();
+    codeError.textContent = '';
+  });
+
+  playerCountInput.addEventListener('input', () => {
+    const value = parseInt(playerCountInput.value, 10);
+    if (Number.isNaN(value)) return;
+    playerCountInput.value = Math.min(Number(playerCountInput.max), Math.max(Number(playerCountInput.min), value));
+  });
+
+  document.getElementById('browseLobbies').addEventListener('click', async () => {
+    try {
+      const response = await fetch('/api/lobbies');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      renderLobbyBrowser(await response.json());
+    } catch (error) {
+      console.error('Error fetching lobbies:', error);
+      const list = document.getElementById('lobbyList');
+      document.getElementById('noLobbiesMessage').style.display = 'none';
+      list.style.display = 'block';
+      list.replaceChildren(el('div', 'error', 'Failed to load lobbies'));
+    }
+    browserModal.classList.add('visible');
+  });
+
+  document.getElementById('closeLobbyBrowser').addEventListener('click', () => browserModal.classList.remove('visible'));
+  document.getElementById('createLobby').addEventListener('click', () => difficultyModal.classList.add('visible'));
+  document.getElementById('exitmodalD').addEventListener('click', () => difficultyModal.classList.remove('visible'));
+
+  document.getElementById('confirmCreate').addEventListener('click', async () => {
+    const difficulty = document.getElementById('difficultySelect').value;
+    const playerCount = parseInt(playerCountInput.value, 10);
+    await waitForUsername();
+    socket.emit('createLobby', { difficulty, playerCount });
+    difficultyModal.classList.remove('visible');
+  });
+
+  document.getElementById('joinLobby').addEventListener('click', () => {
+    const code = codeInput.value.trim().toUpperCase();
+    if (!validateCode(code)) {
+      codeError.textContent = 'Code must be 4 characters (A-Z, 0-9)';
+      return;
+    }
+    window.location.href = `/lobby/${code}`;
+  });
+}
+
+function setReadyButton(mode) {
   const readyBtn = document.getElementById('readyUp');
   if (!readyBtn) return;
-  if (isInGame) {
+  readyBtn.disabled = false;
+  if (mode === 'reconnect') {
     readyBtn.textContent = 'Reconnect';
     readyBtn.onclick = () => {
-      socket.emit('requestReconnectGameData');
       readyBtn.disabled = true;
+      socket.emit('requestReconnectGameData');
     };
   } else {
     readyBtn.textContent = 'Ready Up';
-    readyBtn.disabled = false;
     readyBtn.onclick = () => socket.emit('readyUp');
-  }
-});
-
-async function handleLobbyError(msg) {
-  if (['Lobby not found', 'Lobby full', 'Name taken'].includes(msg)) {
-    const name = await waitForUsername() || "";
-    window.location.href = `/lobbycreation?error=${encodeURIComponent(msg.toLowerCase().replace(' ', '_'))}&name=${encodeURIComponent(name)}`;
   }
 }
 
+function initLobbyPage() {
+  const code = window.location.pathname.split('/').pop().toUpperCase();
+  setReadyButton('ready');
+
+  const codeDisplay = document.getElementById('lobbyCodeDisplay');
+  if (codeDisplay) {
+    codeDisplay.textContent = code;
+    codeDisplay.addEventListener('click', () => {
+      navigator.clipboard?.writeText(code);
+      codeDisplay.classList.add('copied');
+      setTimeout(() => codeDisplay.classList.remove('copied'), 800);
+    });
+  }
+
+  if (!validateCode(code)) {
+    window.location.href = `/lobbycreation?error=lobby_not_found`;
+    return;
+  }
+
+  socket.on('connect', () => socket.emit('joinLobby', { code }));
+
+  socket.on('lobbyError', (message) => {
+    const error = LOBBY_ERRORS[message];
+    if (!error) return notify(message);
+    window.location.href = `/lobbycreation?error=${error}&code=${encodeURIComponent(code)}`;
+  });
+
+  socket.on('inGameStatus', (inGame) => {
+    if (!inGame) return setReadyButton('ready');
+    // lost connection mid game -> jump straight back in
+    if (document.getElementById('gameContainer')) socket.emit('requestReconnectGameData');
+    else setReadyButton('reconnect');
+  });
+
+  socket.on('updateUsers', updatePlayerList);
+  socket.on('countdown', handleCountdown);
+  socket.on('userLeft', handleUserLeft);
+  socket.on('startGame', startGameHandler);
+  socket.on('intermediatePodium', handleIntermediatePodium);
+  socket.on('gameUpdate', handleGameUpdate);
+  socket.on('playerFailed', handlePlayerFailed);
+  socket.on('flagUpdate', handleFlagUpdate);
+  socket.on('progressUpdate', handleProgressUpdate);
+  socket.on('gameOver', handleGameOver);
+  socket.on('playerStatusChanged', handlePlayerStatusChanged);
+  socket.on('spectateUpdate', handleSpectateUpdate);
+  socket.on('gamePaused', handleGamePaused);
+  socket.on('gameResumed', handleGameResumed);
+  socket.on('playerDisconnected', handlePlayerDisconnected);
+  socket.on('reconnectGameData', reconnectGameHandler);
+}
+
+function rememberNames(users) {
+  for (const user of users) playerNames.set(user.id, user.name);
+}
+
+function getPlayerName(playerId) {
+  return playerNames.get(playerId) || 'Opponent';
+}
+
 function updatePlayerList(users) {
+  rememberNames(users);
   const list = document.getElementById('playerList');
   if (list) {
-    list.innerHTML = users.map(user => {
-      const uid = user.uid || '';
-      const imgSrc = uid ? `/profile_pics/${user.uid}.png?v=${Date.now()}` : '/assets/images/icon.png';
-      return `
-      <li class="${user.ready ? 'ready' : ''}" data-id="${user.id}">
-        <img class="player-avatar" src="${imgSrc}" data-uid="${uid}" alt="avatar" onerror="(function(el){ if(el.dataset.uid && el.src.indexOf('.png')!==-1){ el.src='/profile_pics/'+el.dataset.uid+'.jpg'; } else { el.src='/assets/images/icon.png'; } })(this)">
-        <span class="player-name-text">${user.name}</span> ${user.ready ? '✅' : ''}
-      </li>
-    `}).join('');
+    list.replaceChildren(...users.map((user) => {
+      const item = el('li', user.ready ? 'ready' : '');
+      item.dataset.id = user.id;
+      const avatar = el('img', 'player-avatar');
+      avatar.src = avatarUrl(user.uid);
+      avatar.alt = 'avatar';
+      item.append(avatar, el('span', 'player-name-text', user.name));
+      if (user.ready) item.append('✅');
+      return item;
+    }));
   }
   const statusEl = document.getElementById('lobbyStatus');
   if (statusEl) {
-    if (users.length < 2) {
-      statusEl.textContent = 'Waiting for players...';
-    } else if (!users.every(u => u.ready)) {
-      statusEl.textContent = 'All players must ready up!';
-    } else {
-      statusEl.textContent = '';
-    }
+    if (users.length < 2) statusEl.textContent = 'Waiting for players...';
+    else if (!users.every((u) => u.ready)) statusEl.textContent = 'All players must ready up!';
+    else statusEl.textContent = '';
   }
 }
 
@@ -427,279 +312,294 @@ function handleCountdown(seconds) {
 }
 
 function handleUserLeft(userId) {
-  const container = document.querySelector(`.progress-container[data-userid="${userId}"]`);
-  if (container) {
-    container.remove();
-    const progressRows = document.querySelectorAll('.progress-row');
-    progressRows.forEach(row => {
-      if (row.children.length === 1) {
-        row.style.justifyContent = 'flex-start';
-        row.firstElementChild.style.flex = '1 0 100%';
-      }
-    });
-  }
+  const container = document.querySelector(`.progress-container[data-userid="${CSS.escape(userId)}"]`);
+  if (!container) return;
+  container.remove();
+  document.querySelectorAll('.progress-row').forEach((row) => {
+    if (row.children.length === 1) {
+      row.style.justifyContent = 'flex-start';
+      row.firstElementChild.style.flex = '1 0 100%';
+    }
+  });
 }
 
-function startGameHandler({ grid, rows: r, cols: c, mines, initialRevealed, users }) {
-  cols = c;
-  rows = r;
-  const code = window.location.pathname.split('/').pop().toUpperCase();
-  localStorage.setItem('inGameSocketId', socket.id);
-  localStorage.setItem('lobbyCode', code);
-  document.querySelector('.content-box').style.display = 'none';
-  const currentUserId = socket.id;
-  playerStatus = 'alive';
+function startTimer() {
+  stopTimer();
+  gameTimer.startTime = Date.now();
+  gameTimer.pausedDuration = 0;
+  gameTimer.penaltySeconds = 0;
+  gameTimer.pauseStart = null;
+  gameTimer.isPaused = false;
+  gameTimer.interval = setInterval(updateTimerDisplay, 1000);
+  updateTimerDisplay();
+}
 
-  const container = document.querySelector('.container');
-  container.innerHTML += `
+function pauseTimer() {
+  if (gameTimer.isPaused || playerStatus !== 'alive') return;
+  clearInterval(gameTimer.interval);
+  gameTimer.interval = null;
+  gameTimer.pauseStart = Date.now();
+  gameTimer.isPaused = true;
+}
+
+function resumeTimer() {
+  if (!gameTimer.isPaused || playerStatus !== 'alive') return;
+  if (gameTimer.pauseStart) {
+    gameTimer.pausedDuration += Date.now() - gameTimer.pauseStart;
+    gameTimer.pauseStart = null;
+  }
+  gameTimer.isPaused = false;
+  clearInterval(gameTimer.interval);
+  gameTimer.interval = setInterval(updateTimerDisplay, 1000);
+  updateTimerDisplay();
+}
+
+function stopTimer() {
+  clearInterval(gameTimer.interval);
+  gameTimer.interval = null;
+  updateTimerDisplay();
+}
+
+function updateTimerDisplay() {
+  const timerEl = document.getElementById('gameTimer');
+  if (!timerEl) return;
+  let elapsedSeconds = 0;
+  if (gameTimer.startTime) {
+    const pausedNow = gameTimer.isPaused && gameTimer.pauseStart ? Date.now() - gameTimer.pauseStart : 0;
+    elapsedSeconds = Math.max(0, Math.floor((Date.now() - gameTimer.startTime - gameTimer.pausedDuration - pausedNow) / 1000));
+  }
+  timerEl.textContent = `Time: ${elapsedSeconds}s`;
+  if (gameTimer.penaltySeconds > 0) timerEl.append(el('span', 'penalty-display', `+${gameTimer.penaltySeconds}`));
+}
+
+function createProgressBars(currentUserId, users) {
+  const currentUser = users.find((u) => u.id === currentUserId);
+  const players = [currentUser, ...users.filter((u) => u.id !== currentUserId)].filter(Boolean);
+  const rowsHtml = [];
+  for (let i = 0; i < players.length; i += 2) {
+    rowsHtml.push(`
+        <div class="progress-row">
+          ${players.slice(i, i + 2).map((player) => `
+            <div class="progress-container" data-userid="${escapeHtml(player.id)}">
+              <div class="progress-label">
+                ${player.id === currentUserId ? 'You' : escapeHtml(player.name)}
+              </div>
+              <progress class="progress-bar" value="0" max="100"></progress>
+            </div>
+          `).join('')}
+        </div>
+      `);
+  }
+  return `<div class="progress-rows-container">${rowsHtml.join('')}</div>`;
+}
+
+function createGameContainer(users, flagsLeft) {
+  document.getElementById('gameContainer')?.remove();
+  const contentBox = document.querySelector('.content-box');
+  if (contentBox) contentBox.style.display = 'none';
+  document.querySelector('.container').insertAdjacentHTML('beforeend', `
     <div id="gameContainer">
       <div id="header">
-        ${createProgressBars(currentUserId, users)}
+        ${createProgressBars(myId, users)}
         <div class="middle-container">
           <div id="gameTimer">Time: 0 s</div>
-          <div id="flagCounter">Flags left: ${mines}</div>
+          <div id="flagCounter">Flags left: ${Number(flagsLeft)}</div>
         </div>
       </div>
       <div id="minesweeperGrid"></div>
     </div>
-  `;
-
+  `);
   const gridElement = document.getElementById('minesweeperGrid');
+  installGridHandlers(gridElement);
+  return gridElement;
+}
 
-  /* =========  CHORD-HIGHLIGHT  ========= */
-  let leftDown   = false;
-  let rightDown  = false;
+function cellAt(x, y) {
+  return cellEls[y]?.[x] ?? null;
+}
 
-  function clearHighlight() {
-    document.querySelectorAll('.chord-highlight').forEach(c => c.classList.remove('chord-highlight'));
+function revealCellEl({ x, y, value }) {
+  const cell = cellAt(x, y);
+  if (!cell) return;
+  cell.classList.remove('flagged');
+  cell.classList.add('revealed');
+  cell.textContent = value || '';
+  if (value === 'X') cell.classList.add('mine');
+}
+
+function setFlag(x, y, flagged) {
+  const cell = cellAt(x, y);
+  if (!cell || cell.classList.contains('revealed')) return;
+  cell.classList.toggle('flagged', flagged);
+  cell.textContent = flagged ? '🚩' : '';
+}
+
+function renderGrid(gridElement, r, c, cells = [], flags = []) {
+  rows = r;
+  cols = c;
+  cellEls = [];
+  const fragment = document.createDocumentFragment();
+  for (let y = 0; y < rows; y++) {
+    const row = el('div', 'gridRow');
+    const rowCells = [];
+    for (let x = 0; x < cols; x++) {
+      const cell = el('div', 'gridCell');
+      cell.dataset.x = x;
+      cell.dataset.y = y;
+      row.append(cell);
+      rowCells.push(cell);
+    }
+    cellEls.push(rowCells);
+    fragment.append(row);
   }
+  gridElement.replaceChildren(fragment);
+  cells.forEach(revealCellEl);
+  flags.forEach(({ x, y }) => setFlag(x, y, true));
+}
 
-  gridElement.addEventListener('mousedown', e => {
-    const cell = e.target.closest('.gridCell');
+function installGridHandlers(gridElement) {
+  let leftDown = false;
+  let rightDown = false;
+  const canPlay = () => playerStatus === 'alive' && !spectating && !gameTimer.isPaused;
+  const cellOf = (event) => event.target.closest('.gridCell');
+  const coords = (cell) => ({ x: Number(cell.dataset.x), y: Number(cell.dataset.y) });
+  const clearHighlight = () => gridElement.querySelectorAll('.chord-highlight').forEach((c) => c.classList.remove('chord-highlight'));
+
+  gridElement.addEventListener('click', (event) => {
+    const cell = cellOf(event);
+    if (!cell || !canPlay() || cell.classList.contains('revealed') || cell.classList.contains('flagged')) return;
+    socket.emit('revealCell', coords(cell));
+  });
+
+  gridElement.addEventListener('contextmenu', (event) => {
+    const cell = cellOf(event);
     if (!cell) return;
-    if (e.button === 0) leftDown  = true;
-    if (e.button === 2) rightDown = true;
+    event.preventDefault();
+    if (!canPlay()) return;
+    socket.emit(cell.classList.contains('revealed') ? 'chordReveal' : 'placeFlag', coords(cell));
+  });
 
-    if (leftDown && rightDown && cell.classList.contains('revealed')) {
-      const x = +cell.dataset.x;
-      const y = +cell.dataset.y;
-      const num = +cell.textContent;
-      if (!isNaN(num) && num > 0) {
-        /* -----  INSTANT local highlight  ----- */
-        const neighbours = [];
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
-            const nb = document.querySelector(`[data-x="${nx}"][data-y="${ny}"]`);
-            if (nb && !nb.classList.contains('revealed') && !nb.classList.contains('flagged')) {
-              nb.classList.add('chord-highlight');
-              neighbours.push({ x: nx, y: ny });
-            }
-          }
+  gridElement.addEventListener('mousedown', (event) => {
+    const cell = cellOf(event);
+    if (!cell) return;
+    if (event.button === 0) leftDown = true;
+    if (event.button === 2) rightDown = true;
+    const number = Number(cell.textContent);
+    if (!leftDown || !rightDown || !cell.classList.contains('revealed') || !(number > 0)) return;
+    const { x, y } = coords(cell);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const neighbour = cellAt(x + dx, y + dy);
+        if (neighbour && !neighbour.classList.contains('revealed') && !neighbour.classList.contains('flagged')) {
+          neighbour.classList.add('chord-highlight');
         }
-        /* -----  ask server to echo to spectators  ----- */
-        socket.emit('chordHighlight', { x, y });
       }
     }
   });
 
-  gridElement.addEventListener('mouseup', e => {
-    if (e.button === 0) leftDown  = false;
-    if (e.button === 2) rightDown = false;
+  gridElement.addEventListener('mouseup', (event) => {
+    if (event.button === 0) leftDown = false;
+    if (event.button === 2) rightDown = false;
     clearHighlight();
   });
 
-  gridElement.addEventListener('contextmenu', e => {
-    const cell = e.target.closest('.gridCell');
-    if (!cell) return;
-    e.preventDefault();
-    const x = +cell.dataset.x, y = +cell.dataset.y;
-    if (cell.classList.contains('revealed')) {
-      socket.emit('chordReveal', { x, y });
-    }
+  gridElement.addEventListener('mouseleave', () => {
+    leftDown = false;
+    rightDown = false;
+    clearHighlight();
   });
-  /* ===================================== */
+}
 
-  const revealedCells = new Set(initialRevealed.map(c => `${c.x},${c.y}`));
+function revealFullGrid(grid) {
+  grid.forEach((row, y) => row.forEach((value, x) => revealCellEl({ x, y, value })));
+}
 
-  for (let y = 0; y < rows; y++) {
-    const row = document.createElement('div');
-    row.className = 'gridRow';
-    for (let x = 0; x < cols; x++) {
-      const cell = createCell(x, y, revealedCells, grid);
-      row.appendChild(cell);
-    }
-    gridElement.appendChild(row);
-  }
-
+function startGameHandler({ rows: r, cols: c, mines, initialRevealed, users }) {
+  rememberNames(users);
+  resetSpectation();
+  playerStatus = 'alive';
+  const gridElement = createGameContainer(users, mines);
+  renderGrid(gridElement, r, c, initialRevealed);
   startTimer();
 }
 
-function handleIntermediatePodium({ finishedPlayers, playingPlayers }) {
-  alivePlayers = playingPlayers;
-  if (playerStatus === 'alive') return;
-  const modal = document.getElementById('intermediatePodiumModal');
-  if (!modal || modal.classList.contains('visible')) return;
-  modal.classList.add('visible');
-  document.getElementById('closeintermediatePodiumModal').addEventListener('click', () => {
-    modal.classList.remove('visible');
-    addSpectateButton();
-  });
-  document.getElementById('spectatePlayers').addEventListener('click', () => {
-    modal.classList.remove('visible');
-    showSpectatePlayersModal();
-  });
-  const spectateBtn = document.getElementById('spectatePlayers');
-  if (spectateBtn) {
-    spectateBtn.style.display = alivePlayers.length > 0 ? 'block' : 'none';
-  }
-}
-
-function handleGameUpdate({ cells, revealed }) {
-  const revealedCells = new Set(revealed.map(c => `${c.x},${c.y}`));
-  cells.forEach(({ x, y, value }) => {
-    const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-    if (cell) {
-      cell.classList.add('revealed');
-      cell.textContent = value || '';
-      if (value === 'X') cell.classList.add('mine');
-    }
-  });
+function handleGameUpdate({ cells }) {
+  cells.forEach(revealCellEl);
 }
 
 function handlePlayerFailed({ x, y }) {
-  const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-  if (cell) {
-    cell.classList.add('revealed', 'mine');
-    cell.textContent = 'X';
-  }
-  document.querySelectorAll('.gridCell').forEach(cell => {
-    cell.onclick = null;
-    cell.oncontextmenu = null;
-  });
+  playerStatus = 'dead';
+  revealCellEl({ x, y, value: 'X' });
   stopTimer();
 }
 
 function handleFlagUpdate({ userId, x, y, flagged, flagsLeft }) {
-  const isSpectator = spectating && spectatedPlayerId === userId;
-  if (userId !== socket.id && !isSpectator) return;
-  const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-  if (cell) {
-    cell.classList.toggle('flagged', flagged);
-    cell.textContent = flagged ? '🚩' : '';
-  }
+  const isWatched = spectating && spectatedPlayerId === userId;
+  if (userId !== myId && !isWatched) return;
+  setFlag(x, y, flagged);
   const flagCounter = document.getElementById('flagCounter');
-  if (flagCounter) {
-    flagCounter.textContent = `Flags left: ${flagsLeft}`;
-  }
+  if (flagCounter) flagCounter.textContent = `Flags left: ${flagsLeft}`;
 }
 
 function handleProgressUpdate(usersProgress) {
-  const myId = socket.id;
-  usersProgress.forEach(user => {
-    let container = document.querySelector(`.progress-container[data-userid="${user.id}"]`);
-    if (!container) {
-      const users = usersProgress.map(up => ({ id: up.id, name: up.name }));
-      const progressContainer = document.querySelector('.progress-rows-container');
-      if (progressContainer) {
-        progressContainer.innerHTML = createProgressBars(myId, users);
-      }
-      return;
-    }
-    const progressBar = container.querySelector('.progress-bar');
-    if (progressBar) {
-      progressBar.value = user.progress;
-      const label = container.querySelector('.progress-label');
-      if (label && user.id !== myId) {
-        label.textContent = user.name;
-      }
-    }
-  });
-}
-
-function handleGameOver({ results, grid }) {
-  localStorage.removeItem('inGameSocketId');
-  localStorage.removeItem('lobbyCode');
-  stopTimer();
-  if (spectateTimerInterval) clearInterval(spectateTimerInterval);
-  revealFullGrid(grid);
-  resetSpectation();
-  const intermediateModal = document.getElementById('intermediatePodiumModal');
-  if (intermediateModal) intermediateModal.style.display = 'none';
-  const modal = document.getElementById('gameOverModal');
-  if (modal) {
-    const message = document.getElementById('gameOverMessage');
-    if (message) message.innerHTML = createPodiumDisplay(results);
-    modal.style.display = 'flex';
-    const rematchButton = document.getElementById('rematchButton');
-    if (rematchButton) {
-      rematchButton.onclick = () => {
-        const lobbyCode = window.location.pathname.split('/').pop();
-        window.location.href = `/lobby/${lobbyCode}`;
-      };
-    }
-    const mainMenuButton = document.getElementById('mainMenuButton');
-    if (mainMenuButton) {
-      mainMenuButton.onclick = () => {
-        window.location.href = '/lobbycreation';
-      };
-    }
+  const missing = usersProgress.some((user) => !document.querySelector(`.progress-container[data-userid="${CSS.escape(user.id)}"]`));
+  if (missing) {
+    const container = document.querySelector('.progress-rows-container');
+    if (container) container.outerHTML = createProgressBars(myId, usersProgress);
+  }
+  for (const user of usersProgress) {
+    const container = document.querySelector(`.progress-container[data-userid="${CSS.escape(user.id)}"]`);
+    const bar = container?.querySelector('.progress-bar');
+    if (!bar) continue;
+    bar.value = user.progress;
+    const label = container.querySelector('.progress-label');
+    if (label && user.id !== myId) label.textContent = user.name;
   }
 }
 
 function handlePlayerStatusChanged({ playerId, status }) {
-  if (playerId === socket.id) {
+  if (playerId === myId) {
     playerStatus = status;
-    if (status !== 'alive') {
-      stopTimer();
-    }
+    if (status !== 'alive') stopTimer();
   }
-  if (status === 'dead' || status === 'finished') {
-    alivePlayers = alivePlayers.filter(player => player.id !== playerId);
-    if (spectating && spectatedPlayerId === playerId && alivePlayers.length > 0) {
+  if (status === 'alive') {
+    if (playerId !== myId && !alivePlayers.some((p) => p.id === playerId)) {
+      alivePlayers.push({ id: playerId, name: getPlayerName(playerId) });
+    }
+    return;
+  }
+  alivePlayers = alivePlayers.filter((player) => player.id !== playerId);
+  if (spectating && spectatedPlayerId === playerId) {
+    if (alivePlayers.length > 0) {
       spectatedPlayerId = alivePlayers[0].id;
-      socket.emit('spectatePlayer', alivePlayers[0].id);
+      socket.emit('spectatePlayer', spectatedPlayerId);
     }
   }
 }
 
-function handleSpectateUpdate({ grid, rows, cols, revealedCells, flags, time, flagsLeft }) {
+function handleIntermediatePodium({ playingPlayers }) {
+  alivePlayers = playingPlayers.filter((p) => p.id !== myId);
+  if (playerStatus === 'alive' || spectating) return;
+  const modal = document.getElementById('intermediatePodiumModal');
+  if (!modal || modal.classList.contains('visible')) return;
+  modal.classList.add('visible');
+  document.getElementById('closeintermediatePodiumModal').onclick = () => {
+    modal.classList.remove('visible');
+    addSpectateButton();
+  };
+  const spectateBtn = document.getElementById('spectatePlayers');
+  spectateBtn.style.display = alivePlayers.length > 0 ? 'block' : 'none';
+  spectateBtn.onclick = () => {
+    modal.classList.remove('visible');
+    showSpectatePlayersModal();
+  };
+}
+
+function handleSpectateUpdate({ rows: r, cols: c, cells, flags, time, flagsLeft }) {
   const gridElement = document.getElementById('minesweeperGrid');
   if (!gridElement) return;
-  if (spectateTimerInterval) {
-    clearInterval(spectateTimerInterval);
-  }
-  gridElement.innerHTML = '';
-  const revealedSet = new Set(revealedCells.map(c => `${c.x},${c.y}`));
-  for (let y = 0; y < rows; y++) {
-    const row = document.createElement('div');
-    row.className = 'gridRow';
-    for (let x = 0; x < cols; x++) {
-      const cell = document.createElement('div');
-      cell.className = 'gridCell';
-      cell.dataset.x = x;
-      cell.dataset.y = y;
-      const isRevealed = revealedSet.has(`${x},${y}`);
-      if (isRevealed) {
-        cell.classList.add('revealed');
-        cell.textContent = grid[y][x] || '';
-        if (grid[y][x] === 'X') cell.classList.add('mine');
-      }
-      row.appendChild(cell);
-    }
-    gridElement.appendChild(row);
-  }
-  if (Array.isArray(flags)) {
-    flags.forEach(({ x, y }) => {
-      const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-      if (cell && !cell.classList.contains('revealed')) {
-        cell.textContent = '🚩';
-        cell.classList.add('flagged');
-      }
-    });
-  }
+  clearInterval(spectateTimerInterval);
+  renderGrid(gridElement, r, c, cells, flags);
   const timerEl = document.getElementById('gameTimer');
   if (timerEl) {
     let currentTime = time || 0;
@@ -710,173 +610,100 @@ function handleSpectateUpdate({ grid, rows, cols, revealedCells, flags, time, fl
     }, 1000);
   }
   const flagCounter = document.getElementById('flagCounter');
-  if (flagCounter && flagsLeft !== undefined) {
-    flagCounter.textContent = `Flags left: ${flagsLeft}`;
-  }
+  if (flagCounter && flagsLeft !== undefined) flagCounter.textContent = `Flags left: ${flagsLeft}`;
+}
+
+function handleGameOver({ results, grid }) {
+  playerStatus = 'over';
+  stopTimer();
+  clearInterval(spectateTimerInterval);
+  hideDisconnectModal();
+  revealFullGrid(grid);
+  resetSpectation();
+  const intermediateModal = document.getElementById('intermediatePodiumModal');
+  if (intermediateModal) intermediateModal.classList.remove('visible');
+  const spectateModal = document.getElementById('spectatePlayersModal');
+  if (spectateModal) spectateModal.style.display = 'none';
+
+  const modal = document.getElementById('gameOverModal');
+  if (!modal) return;
+  document.getElementById('gameOverMessage').innerHTML = createPodiumDisplay(results);
+  modal.style.display = 'flex';
+  document.getElementById('rematchButton').onclick = () => {
+    window.location.href = window.location.pathname;
+  };
+  document.getElementById('mainMenuButton').onclick = () => {
+    window.location.href = '/lobbycreation';
+  };
 }
 
 function handleGamePaused({ playerId, timeout }) {
   pauseTimer();
-  const playerName = getPlayerName(playerId);
-  showDisconnectModal(playerName, timeout);
+  showDisconnectModal(getPlayerName(playerId), timeout);
 }
 
-function handleGameResumed({ reconnectedPlayerId, penalty }) {
+function handleGameResumed() {
   resumeTimer();
-  if (reconnectedPlayerId === socket.id && penalty > 0) {
-    showPenaltyAnimation(socket.id, penalty * 1000);
-    updateTimerDisplay();
-  }
   hideDisconnectModal();
 }
 
 function handlePlayerDisconnected({ playerId, timeout }) {
-  if (timeout) {
-    const playerName = getPlayerName(playerId);
-    showDisconnectedMessage(playerName);
-    hideDisconnectModal();
-  }
+  if (!timeout) return;
+  console.log(`${getPlayerName(playerId)} did not reconnect in time`);
+  hideDisconnectModal();
 }
 
 function reconnectGameHandler(data) {
-  localStorage.setItem('inGameSocketId', socket.id);
-  gameTimer.isPaused = data.isPaused;
-  const oldGameContainer = document.getElementById('gameContainer');
-  if (oldGameContainer) oldGameContainer.remove();
-  const readyBtn = document.getElementById('readyUp');
-  if (readyBtn) readyBtn.disabled = false;
-  document.querySelector('.content-box').style.display = 'none';
+  rememberNames(data.users);
+  resetSpectation();
+  playerStatus = data.isDead ? 'dead' : 'alive';
+
+  const gridElement = createGameContainer(data.users, data.mines - data.flags.length);
+  renderGrid(gridElement, data.rows, data.cols, data.cells, data.flags);
+
+  clearInterval(gameTimer.interval);
+  gameTimer.interval = null;
+  gameTimer.startTime = Date.now() - data.elapsedMs;
+  gameTimer.pausedDuration = 0;
+  gameTimer.penaltySeconds = Math.round((data.penalty || 0) / 1000);
+  gameTimer.isPaused = Boolean(data.isPaused) && !data.isDead;
+  gameTimer.pauseStart = gameTimer.isPaused ? Date.now() : null;
+  if (!data.isDead && !gameTimer.isPaused) gameTimer.interval = setInterval(updateTimerDisplay, 1000);
+  updateTimerDisplay();
 
   if (data.isDead) {
-    playerStatus = 'dead';
-    alivePlayers = data.users.filter(user => {
-      const state = data.playerStates[user.id];
-      return state && state.status === 'alive';
-    });
-    
+    alivePlayers = data.users.filter((user) => user.status === 'alive' && user.id !== myId);
     if (alivePlayers.length > 0) {
-      const randomPlayer = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
-      spectatedPlayerId = randomPlayer.id;
+      const target = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
+      spectatedPlayerId = target.id;
       spectating = true;
-      socket.emit('spectatePlayer', randomPlayer.id);
-      setTimeout(() => {
-        showSpectatePlayersModal();
-      }, 500);
+      socket.emit('spectatePlayer', target.id);
+      setTimeout(showSpectatePlayersModal, 500);
     }
-  }
-  
-  const container = document.querySelector('.container');
-  container.innerHTML += `
-    <div id="gameContainer">
-      <div id="header">
-        ${createProgressBars(socket.id, data.users)}
-        <div class="middle-container">
-          <div id="gameTimer">Time: 0 s</div>
-          <div id="flagCounter">Flags left: ${data.mines - data.flags.length}</div>
-        </div>
-      </div>
-      <div id="minesweeperGrid"></div>
-    </div>
-  `;
-  
-  const gridElement = document.getElementById('minesweeperGrid');
-  gridElement.innerHTML = '';
-  const revealedSet = new Set(data.revealedCells.map(c => `${c.x},${c.y}`));
-  for (let y = 0; y < data.rows; y++) {
-    const row = document.createElement('div');
-    row.className = 'gridRow';
-    for (let x = 0; x < data.cols; x++) {
-      const cell = document.createElement('div');
-      cell.className = 'gridCell';
-      cell.dataset.x = x;
-      cell.dataset.y = y;
-      const isRevealed = revealedSet.has(`${x},${y}`);
-      const isFlagged = data.flags.some(f => f.x === x && f.y === y);
-      if (isRevealed) {
-        cell.classList.add('revealed');
-        cell.textContent = data.grid[y][x] || '';
-        if (data.grid[y][x] === 'X') cell.classList.add('mine');
-      } else if (isFlagged) {
-        cell.classList.add('flagged');
-        cell.textContent = '🚩';
-      }
-      if (!isRevealed) {
-        cell.onclick = () => socket.emit('revealCell', { x, y });
-        cell.oncontextmenu = (e) => {
-          e.preventDefault();
-          if (cell.classList.contains('revealed')) return;
-          socket.emit('placeFlag', { x, y });
-        };
-      }
-      row.appendChild(cell);
-    }
-    gridElement.appendChild(row);
-  }
-
-  const playerState = data.playerStates[socket.id];
-  if (playerState) {
-    let currentElapsedTime = 0;
-    
-    if (playerState.status === 'alive') {
-      const now = Date.now();
-      currentElapsedTime = Math.floor((now - playerState.startTime - playerState.pausedDuration) / 1000);
-    } else {
-      currentElapsedTime = playerState.time || 0;
-    }
-    
-    gameTimer.startTime = Date.now() - (currentElapsedTime * 1000);
-    gameTimer.pausedDuration = playerState.pausedDuration || 0;
-    gameTimer.penaltySeconds = (data.penalty || 0) / 1000;
-    
-    console.log("Reconnect time calculation:", {
-      status: playerState.status,
-      currentElapsedTime,
-      startTime: playerState.startTime,
-      pausedDuration: playerState.pausedDuration,
-      calculatedTime: currentElapsedTime
-    });
-    
-    updateTimerDisplay();
-  }
-
-  if (data.penalty > 0) {
-    showPenaltyAnimation(socket.id, data.penalty);
-  }
-
-  if (data.isPaused) {
-    pauseTimer();
-  } else if (playerStatus === 'alive') {
-    if (gameTimer.interval) {
-      clearInterval(gameTimer.interval);
-    }
-    gameTimer.interval = setInterval(updateTimerDisplay, 1000);
-    updateTimerDisplay();
+  } else if (data.penalty > 0) {
+    showPenaltyAnimation(myId, data.penalty);
   }
 }
 
 function showDisconnectModal(playerName, timeout) {
   hideDisconnectModal();
-  if (!document.getElementById('disconnectModal')) {
-    const modal = document.createElement('div');
-    modal.id = 'disconnectModal';
-    modal.className = 'modal';
-    modal.innerHTML = `
-      <div class="modal-content">
-        <h2>${playerName} disconnected</h2>
-        <p>Waiting <span id="disconnectCountdown">${timeout}</span> seconds...</p>
-        <p>Game is paused</p>
-      </div>
-    `;
-    document.body.appendChild(modal);
-  }
+  const modal = el('div', 'modal');
+  modal.id = 'disconnectModal';
+  const content = el('div', 'modal-content');
+  const countdown = el('span', '', String(timeout));
+  countdown.id = 'disconnectCountdown';
+  const waiting = el('p');
+  waiting.append('Waiting ', countdown, ' seconds...');
+  content.append(el('h2', '', `${playerName} disconnected`), waiting, el('p', '', 'Game is paused'));
+  modal.append(content);
+  document.body.append(modal);
+
   disconnectCountdown = timeout;
   updateDisconnectCountdown();
   disconnectModalInterval = setInterval(() => {
     disconnectCountdown--;
     updateDisconnectCountdown();
     if (disconnectCountdown <= 0) {
-      clearInterval(disconnectModalInterval);
-      disconnectModalInterval = null;
       resumeTimer();
       hideDisconnectModal();
     }
@@ -885,149 +712,55 @@ function showDisconnectModal(playerName, timeout) {
 
 function updateDisconnectCountdown() {
   const countdownEl = document.getElementById('disconnectCountdown');
-  if (countdownEl) {
-    countdownEl.textContent = disconnectCountdown;
-    if (disconnectCountdown <= 3) {
-      countdownEl.style.color = 'red';
-      countdownEl.style.fontWeight = 'bold';
-      countdownEl.style.animation = 'pulse 0.5s infinite';
-    }
+  if (!countdownEl) return;
+  countdownEl.textContent = disconnectCountdown;
+  if (disconnectCountdown <= 3) {
+    countdownEl.style.color = 'red';
+    countdownEl.style.fontWeight = 'bold';
+    countdownEl.style.animation = 'pulse 0.5s infinite';
   }
 }
 
 function hideDisconnectModal() {
-  if (disconnectModalInterval) {
-    clearInterval(disconnectModalInterval);
-  }
-  const modal = document.getElementById('disconnectModal');
-  if (modal) {
-    modal.remove();
-  }
-}
-
-function showDisconnectedMessage(playerName) {
-  console.log(`${playerName} did not reconnect in time`);
+  clearInterval(disconnectModalInterval);
+  disconnectModalInterval = null;
+  document.getElementById('disconnectModal')?.remove();
 }
 
 function showPenaltyAnimation(playerId, penalty) {
-  const penaltySeconds = penalty / 1000;
-  const progressContainer = document.querySelector(`.progress-container[data-userid="${playerId}"]`);
-  if (progressContainer) {
-    const penaltyEl = document.createElement('div');
-    penaltyEl.className = 'penalty-animation';
-    penaltyEl.textContent = `+${penaltySeconds}`;
-    penaltyEl.style.color = 'red';
-    progressContainer.appendChild(penaltyEl);
-    penaltyEl.style.animation = 'floatUp 1s forwards';
-    setTimeout(() => {
-      penaltyEl.remove();
-    }, 1000);
-  }
-}
-
-function getPlayerName(playerId) {
-  const playerList = document.getElementById('playerList');
-  if (playerList) {
-    const playerItem = playerList.querySelector(`[data-id="${playerId}"]`);
-    if (playerItem) {
-      return playerItem.textContent.replace('✅', '').trim();
-    }
-  }
-  return 'Opponent';
-}
-
-function createCell(x, y, revealedCells, grid) {
-  const cell = document.createElement('div');
-  cell.className = 'gridCell' + (revealedCells.has(`${x},${y}`) ? ' revealed' : '');
-  cell.dataset.x = x;
-  cell.dataset.y = y;
-  if (revealedCells.has(`${x},${y}`)) {
-    cell.textContent = grid[y][x] || '';
-  }
-  cell.onclick = () => {
-    if (!revealedCells.has(`${x},${y}`)) {
-      socket.emit('revealCell', { x, y });
-    }
-  };
-  cell.oncontextmenu = (e) => {
-    e.preventDefault();
-    if (revealedCells.has(`${x},${y}`)) return;
-    socket.emit('placeFlag', { x, y });
-  };
-  return cell;
-}
-
-function revealFullGrid(grid) {
-  grid.forEach((row, y) => {
-    row.forEach((cellValue, x) => {
-      const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-      if (cell) {
-        cell.classList.add('revealed');
-        cell.textContent = cellValue || '';
-        if (cellValue === 'X') cell.classList.add('mine');
-      }
-    });
-  });
-}
-
-function createProgressBars(currentUserId, users) {
-  const currentUser = users.find(u => u.id === currentUserId);
-  const opponents = users.filter(u => u.id !== currentUserId);
-  const playersToDisplay = [currentUser, ...opponents];
-  let rows = [];
-  for (let i = 0; i < playersToDisplay.length; i += 2) {
-    const rowPlayers = playersToDisplay.slice(i, i + 2);
-    rows.push(rowPlayers);
-  }
-  return `
-    <div class="progress-rows-container">
-      ${rows.map(rowPlayers => `
-        <div class="progress-row">
-          ${rowPlayers.map(player => player ? `
-            <div class="progress-container" data-userid="${player.id}">
-              <div class="progress-label">
-                ${player.id === currentUserId ? 'You' : player.name}
-              </div>
-              <progress class="progress-bar" value="0" max="100"></progress>
-            </div>
-          ` : '').join('')}
-        </div>
-      `).join('')}
-    </div>
-  `;
+  const progressContainer = document.querySelector(`.progress-container[data-userid="${CSS.escape(playerId)}"]`);
+  if (!progressContainer) return;
+  const penaltyEl = el('div', 'penalty-animation', `+${penalty / 1000}`);
+  penaltyEl.style.color = 'red';
+  penaltyEl.style.animation = 'floatUp 1s forwards';
+  progressContainer.append(penaltyEl);
+  setTimeout(() => penaltyEl.remove(), 1000);
 }
 
 function showSpectatePlayersModal() {
   const modal = document.getElementById('spectatePlayersModal');
   const list = document.getElementById('spectatePlayersList');
   if (!modal || !list) return;
-  list.innerHTML = '';
-  document.getElementById('closeSpectateModal').addEventListener('click', () => {
+  document.getElementById('closeSpectateModal').onclick = () => {
     modal.style.display = 'none';
-  });
+  };
   if (alivePlayers.length === 0) {
-    list.innerHTML = '<div class="no-players">No active players to spectate</div>';
+    list.replaceChildren(el('div', 'no-players', 'No active players to spectate'));
   } else {
-    alivePlayers.forEach(player => {
-      const playerItem = document.createElement('div');
-      playerItem.className = 'spectate-item';
-      playerItem.innerHTML = `
-        <div>${player.name}</div>
-        <div class="spectate-stats">
-        </div>
-      `;
-      playerItem.dataset.id = player.id;
-      playerItem.addEventListener('click', () => {
+    list.replaceChildren(...alivePlayers.map((player) => {
+      const item = el('div', 'spectate-item');
+      item.dataset.id = player.id;
+      item.append(el('div', '', player.name), el('div', 'spectate-stats'));
+      item.addEventListener('click', () => {
         spectatedPlayerId = player.id;
         spectating = true;
         modal.style.display = 'none';
-        const intermediateModal = document.getElementById('intermediatePodiumModal');
-        if (intermediateModal) intermediateModal.style.display = 'none';
+        document.getElementById('intermediatePodiumModal')?.classList.remove('visible');
         socket.emit('spectatePlayer', player.id);
         addSpectateButton();
       });
-      list.appendChild(playerItem);
-    });
+      return item;
+    }));
   }
   modal.style.display = 'flex';
 }
@@ -1036,76 +769,56 @@ function addSpectateButton() {
   if (document.getElementById('spectateButton')) return;
   const gameContainer = document.getElementById('gameContainer');
   if (!gameContainer) return;
-  const spectateBtn = document.createElement('button');
+  const spectateBtn = el('button', 'spectate-button', 'Spectate');
   spectateBtn.id = 'spectateButton';
-  spectateBtn.className = 'spectate-button';
-  spectateBtn.textContent = 'Spectate';
   spectateBtn.addEventListener('click', showSpectatePlayersModal);
-  const grid = document.getElementById('minesweeperGrid');
-  gameContainer.insertBefore(spectateBtn, grid);
+  gameContainer.insertBefore(spectateBtn, document.getElementById('minesweeperGrid'));
 }
 
 function resetSpectation() {
   spectating = false;
   spectatedPlayerId = null;
   alivePlayers = [];
-  const spectateBtn = document.getElementById('spectateButton');
-  if (spectateBtn) spectateBtn.remove();
+  clearInterval(spectateTimerInterval);
+  document.getElementById('spectateButton')?.remove();
 }
 
 function createPodiumDisplay(results) {
-  const currentUserId = socket.id;
-  const displayResults = results.map(player => ({
-    ...player,
-    status: player.status === 'finished' ? 'winner' : player.status
-  }));
-  const winners = results.filter(r => r.status === 'winner').sort((a, b) => a.time - b.time);
-  const losers = results.filter(r => r.status === 'loser' || r.status === 'disconnected').sort((a, b) => b.progress - a.progress);
-  const sortedResults = [...winners, ...losers];
-  sortedResults.forEach((player, index) => {
-    player.rank = index + 1;
-  });
-  const firstPlace = sortedResults.find(p => p.rank === 1);
-  const playersAfterFirst = sortedResults.filter(p => p.rank > 1);
-  const leftPlayers = [];
-  const rightPlayers = [];
-  playersAfterFirst.forEach((player, index) => {
-    if (index % 2 === 0) {
-      rightPlayers.push(player);
-    } else {
-      leftPlayers.unshift(player);
-    }
-  });
-  let podiumHTML = '<div class="podium-container"><div class="podium-row">';
-  leftPlayers.forEach(player => {
-    podiumHTML += createPodiumTier(player, currentUserId);
-  });
-  if (firstPlace) {
-    podiumHTML += createPodiumTier(firstPlace, currentUserId, true);
-  }
-  rightPlayers.forEach(player => {
-    podiumHTML += createPodiumTier(player, currentUserId);
-  });
-  podiumHTML += '</div></div>';
-  return podiumHTML;
+  const winners = results.filter((r) => r.status === 'winner').sort((a, b) => a.time - b.time);
+  const losers = results.filter((r) => r.status !== 'winner').sort((a, b) => b.progress - a.progress);
+  const sorted = [...winners, ...losers].map((player, index) => ({ ...player, rank: index + 1 }));
+  const [first, ...others] = sorted;
+  const left = [];
+  const right = [];
+  others.forEach((player, index) => (index % 2 === 0 ? right.push(player) : left.unshift(player)));
+  const tiers = [...left.map((p) => createPodiumTier(p)), first ? createPodiumTier(first) : '', ...right.map((p) => createPodiumTier(p))];
+  return `<div class="podium-container"><div class="podium-row">${tiers.join('')}</div></div>`;
 }
 
-function createPodiumTier(player, currentUserId, isCenter = false) {
-  const tierClass = player.rank === 1 ? 'first' :
-                   player.rank === 2 ? 'second' :
-                   player.rank === 3 ? 'third' : 'other';
+function createPodiumTier(player) {
+  const tierClass = ['first', 'second', 'third'][player.rank - 1] || 'other';
   return `
-    <div class="podium-tier ${tierClass} ${player.id === currentUserId ? 'current-player' : ''}">
-      <div class="tier-rank">#${player.rank}</div>
+    <div class="podium-tier ${tierClass} ${player.id === myId ? 'current-player' : ''}">
+      <div class="tier-rank">#${Number(player.rank)}</div>
       <div class="player-info">
-        <div class="player-name">${player.name}</div>
+        <div class="player-name">${escapeHtml(player.name)}</div>
         <div class="player-stats">
-          <span>${player.progress}%</span>
+          <span>${Number(player.progress)}%</span>
           <br>
-          <span>${player.time} s</span>
-          ${player.penalty ? `<span class="penalty">+${player.penalty}</span>` : ''}
+          <span>${Number(player.time)} s</span>
+          ${player.penalty ? `<span class="penalty">+${Number(player.penalty)}</span>` : ''}
         </div>
       </div>
     </div>
   `;
 }
+
+function init() {
+  const backButtonIndex = document.getElementById('backButtonIndex');
+  if (backButtonIndex) backButtonIndex.onclick = () => { window.location.href = '/'; };
+  if (isLobbyCreationPage) initLobbyCreationPage();
+  if (isLobbyPage) initLobbyPage();
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();

@@ -1,33 +1,21 @@
 function showCustomAlert(msg, type = "error") {
-  console.log("showCustomAlert aufgerufen:", msg, type);
-  
-  const existing = document.querySelector('.custom-notification');
-  if (existing) {
-    console.log("Alte Benachrichtigung entfernt");
-    existing.remove();
-  }
+  document.querySelector('.custom-notification')?.remove();
 
   const div = document.createElement('div');
   div.className = `custom-notification ${type}`;
   div.textContent = msg;
   document.body.appendChild(div);
-  
-  console.log("Neue Benachrichtigung erstellt");
 
   setTimeout(() => {
     div.classList.add('fade-out');
     setTimeout(() => {
-      if (div.parentNode) {
-        div.remove();
-        console.log("Benachrichtigung entfernt");
-      }
+      div.remove();
     }, 300);
   }, 3500);
 }
 
 // Style nur einmal hinzufügen
 if (!document.getElementById('custom-alert-style')) {
-  console.log("Füge Style hinzu");
   const style = document.createElement('style');
   style.id = 'custom-alert-style';
   style.textContent = `

@@ -41,3 +41,12 @@ git clone https://github.com/Ryhox/minesweeper.ryhox.dev.git
 cd minesweeper.ryhox.dev
 npm install
 npm start
+```
+
+You need **Node.js 22+** and a Firebase project:
+
+- `firebaseServiceAccount.json` in the root folder
+- `public/assets/js/firebase-auth.js` with your Firebase web config (`firebase.initializeApp({...})`)
+- optional `.env`: `PORT`, `ADMIN_UIDS`, `RECAPTCHA_SECRET_LOGIN`, `RECAPTCHA_SECRET_REGISTER`, `TRUST_PROXY`, `CSP_EXTRA_FRAME_SRC`
+
+Admin: put your uid in `ADMIN_UIDS` or set `"role": "admin"` in your file in `userDATA/`.

@@ -15,304 +15,241 @@ document.addEventListener('DOMContentLoaded', function () {
   const submitResetEmailBtn = document.getElementById('submitResetEmail');
   const closeModal = document.querySelector('.close');
 
-  let oauthLoginInProgress = false;
+  const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,12}$/;
+  let authFlowInProgress = false;
 
-  function setCookie(name, value, days) {
-    const expires = new Date(Date.now() + days * 864e5).toUTCString();
-    document.cookie = name + '=' + encodeURIComponent(value) + '; expires=' + expires + '; path=/';
+  async function apiPost(url, body, token) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body ?? {}) });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data };
   }
 
-  if (sendResetEmailBtn) {
-    sendResetEmailBtn.addEventListener('click', function() {
-      if (loginEmailInput && loginEmailInput.value) {
-        resetEmailInput.value = loginEmailInput.value;
-      }
+  function resetCaptcha() {
+    if (typeof grecaptcha !== 'undefined') grecaptcha.reset();
+  }
+
+  async function verifyCaptcha(action) {
+    if (typeof grecaptcha === 'undefined') {
+      showCustomAlert('Captcha konnte nicht geladen werden', 'error');
+      return false;
+    }
+    const token = grecaptcha.getResponse();
+    if (!token) {
+      showCustomAlert('Bitte löse das Captcha', 'error');
+      return false;
+    }
+    const { ok, data } = await apiPost('/recaptcha', { token, action });
+    if (!ok || !data.success) {
+      resetCaptcha();
+      showCustomAlert('Captcha ungültig, bitte erneut versuchen', 'error');
+      return false;
+    }
+    return true;
+  }
+
+  function redirectToProfile() {
+    setTimeout(() => { window.location.href = '/profile'; }, 1500);
+  }
+
+  const toggle = document.getElementById('toggleLoginPassword');
+  const passwordInput = loginPasswordInput || registerPasswordInput;
+  if (toggle && passwordInput) {
+    toggle.addEventListener('click', () => {
+      passwordInput.type = passwordInput.type === 'password' ? 'text' : 'password';
+      toggle.classList.toggle('fa-eye');
+      toggle.classList.toggle('fa-eye-slash');
+    });
+  }
+
+  if (sendResetEmailBtn && resetPasswordModal) {
+    sendResetEmailBtn.addEventListener('click', function () {
+      if (loginEmailInput && loginEmailInput.value) resetEmailInput.value = loginEmailInput.value;
       resetPasswordModal.style.display = 'flex';
     });
   }
 
-  if (closeModal) {
-    closeModal.addEventListener('click', function() {
+  if (closeModal && resetPasswordModal) {
+    closeModal.addEventListener('click', function () {
       resetPasswordModal.style.display = 'none';
     });
   }
 
   if (resetPasswordModal) {
-    window.addEventListener('click', function(event) {
-      if (event.target === resetPasswordModal) {
-        resetPasswordModal.style.display = 'none';
-      }
-    });
-  }
-
-  if (submitResetEmailBtn) {
-    submitResetEmailBtn.addEventListener('click', async function() {
-      const email = resetEmailInput.value.trim();
-      
-      if (!email) {
-        showCustomAlert("Bitte gib deine E-Mail Adresse ein", "error");
-        return;
-      }
-
-      if (!validateEmail(email)) {
-        showCustomAlert("Bitte gib eine gültige E-Mail Adresse ein", "error");
-        return;
-      }
-
-      try {
-        await auth.sendPasswordResetEmail(email);
-        showCustomAlert("Passwort-Reset Link wurde an " + email + " gesendet", "success");
-        resetPasswordModal.style.display = 'none';
-        resetEmailInput.value = '';
-      } catch (error) {
-        console.error('Password reset error:', error);
-        let errorMessage = "Fehler beim Senden des Reset-Links";
-        
-        if (error.code === 'auth/user-not-found') {
-          errorMessage = "Kein Konto mit dieser E-Mail Adresse gefunden";
-        } else if (error.code === 'auth/invalid-email') {
-          errorMessage = "Ungültige E-Mail Adresse";
-        } else if (error.code === 'auth/too-many-requests') {
-          errorMessage = "Zu viele Versuche. Bitte warte einen Moment";
-        }
-        
-        showCustomAlert(errorMessage, "error");
-      }
+    window.addEventListener('click', function (event) {
+      if (event.target === resetPasswordModal) resetPasswordModal.style.display = 'none';
     });
   }
 
   function validateEmail(email) {
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return re.test(email);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
-  auth.onAuthStateChanged(async user => {
-    if (user) {
+  if (submitResetEmailBtn) {
+    submitResetEmailBtn.addEventListener('click', async function () {
+      const email = resetEmailInput.value.trim();
+      if (!email) return showCustomAlert('Bitte gib deine E-Mail Adresse ein', 'error');
+      if (!validateEmail(email)) return showCustomAlert('Bitte gib eine gültige E-Mail Adresse ein', 'error');
+
       try {
-        const token = await user.getIdToken();
-        const response = await fetch('/api/getUser', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ uid: user.uid })
-        });
-
-        const userData = await response.json();
-        if (userData.username && user.displayName !== userData.username) {
-          await user.updateProfile({ displayName: userData.username });
-        }
-      } catch (err) {
-        console.error('Error fetching user data:', err);
-      }
-    }
-  });
-
-  if (form) {
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-      if (oauthLoginInProgress) return;
-
-      const isLoginPage = !!loginEmailInput && !!loginPasswordInput;
-      const isRegisterPage = !!registerEmailInput && !!registerPasswordInput && !!registerUsernameInput;
-
-      if (isLoginPage && !isRegisterPage) {
-        // LOGIN PROCESS
-        const email = loginEmailInput.value.trim();
-        const password = loginPasswordInput.value.trim();
-        
-        if (!email || !password) {
-          showCustomAlert("Bitte fülle alle Felder aus", "error");
+        await auth.sendPasswordResetEmail(email);
+        showCustomAlert('Falls ein Konto existiert, wurde ein Reset-Link an ' + email + ' gesendet', 'success');
+        resetPasswordModal.style.display = 'none';
+        resetEmailInput.value = '';
+      } catch (error) {
+        console.error('Password reset error:', error);
+        let errorMessage = 'Fehler beim Senden des Reset-Links';
+        if (error.code === 'auth/user-not-found') {
+          showCustomAlert('Falls ein Konto existiert, wurde ein Reset-Link an ' + email + ' gesendet', 'success');
+          resetPasswordModal.style.display = 'none';
           return;
         }
-
-        const captchaResponse = grecaptcha.getResponse();
-        if (!captchaResponse) {
-          showCustomAlert("Bitte löse das Captcha", "error");
-          return;
-        }
-
-        try {
-          const { user } = await auth.signInWithEmailAndPassword(email, password);
-          const token = await user.getIdToken();
-          setCookie('auth_token', token, 30);
-          showCustomAlert("Login erfolgreich!", "success");
-          setTimeout(() => {
-            window.location.href = '/profile';
-          }, 1500);
-        } catch (error) {
-          let errorMessage = "Login fehlgeschlagen!";
-          if (error.code === 'auth/user-not-found') {
-            errorMessage = "Benutzer nicht gefunden!";
-          } else if (error.code === 'auth/wrong-password') {
-            errorMessage = "Falsches Passwort!";
-          } else if (error.code === 'auth/invalid-email') {
-            errorMessage = "Ungültige E-Mail Adresse!";
-          } else if (error.code === 'auth/too-many-requests') {
-            errorMessage = "Zu viele fehlgeschlagene Versuche. Bitte versuche es später erneut";
-          }
-          showCustomAlert(errorMessage, "error");
-        }
-
-      } else if (isRegisterPage) {
-        // REGISTER PROCESS
-        const email = registerEmailInput.value.trim();
-        const password = registerPasswordInput.value.trim();
-        const username = registerUsernameInput.value.trim();
-
-        if (!email || !password || !username) {
-          showCustomAlert("Bitte fülle alle Felder aus", "error");
-          return;
-        }
-
-        const captchaResponse = grecaptcha.getResponse();
-        if (!captchaResponse) {
-          showCustomAlert("Bitte löse das Captcha", "error");
-          return;
-        }
-
-        // Username validation
-        if (username.length < 3) {
-          showCustomAlert("Benutzername muss mindestens 3 Zeichen lang sein", "error");
-          return;
-        }
-
-        if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-          showCustomAlert("Benutzername darf nur Buchstaben, Zahlen und Unterstriche enthalten", "error");
-          return;
-        }
-
-        // Password validation
-        if (password.length < 6) {
-          showCustomAlert("Passwort muss mindestens 6 Zeichen lang sein", "error");
-          return;
-        }
-
-        try {
-          // Check if username exists
-          const checkRes = await fetch('/api/checkUsername', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username })
-          });
-
-          const checkData = await checkRes.json();
-          if (checkData.exists) {
-            showCustomAlert('Benutzername ist bereits vergeben', "error");
-            return;
-          }
-
-          // Create user
-          const { user } = await auth.createUserWithEmailAndPassword(email, password);
-          await user.updateProfile({ displayName: username });
-
-          // Create user in database
-          await fetch('/api/createUser', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: user.uid,
-              username,
-              email
-            })
-          });
-
-          const token = await user.getIdToken();
-          setCookie('auth_token', token, 30);
-          showCustomAlert("Registrierung erfolgreich!", "success");
-          setTimeout(() => {
-            window.location.href = '/profile';
-          }, 1500);
-
-        } catch (error) {
-          console.error('Registration error:', error);
-          let errorMessage = "Registrierung fehlgeschlagen!";
-          if (error.code === 'auth/email-already-in-use') {
-            errorMessage = "E-Mail Adresse wird bereits verwendet!";
-          } else if (error.code === 'auth/weak-password') {
-            errorMessage = "Passwort ist zu schwach!";
-          } else if (error.code === 'auth/invalid-email') {
-            errorMessage = "Ungültige E-Mail Adresse!";
-          }
-          showCustomAlert(errorMessage, "error");
-        }
+        if (error.code === 'auth/invalid-email') errorMessage = 'Ungültige E-Mail Adresse';
+        else if (error.code === 'auth/too-many-requests') errorMessage = 'Zu viele Versuche. Bitte warte einen Moment';
+        showCustomAlert(errorMessage, 'error');
       }
     });
   }
 
-  const oauthButtons = {
-    'google': new firebase.auth.GoogleAuthProvider(),
-    'twitter': new firebase.auth.TwitterAuthProvider(),
-    'github': new firebase.auth.GithubAuthProvider(),
-    'discord': new firebase.auth.OAuthProvider('oidc.discord')
+  auth.onAuthStateChanged(async (user) => {
+    if (!user || authFlowInProgress) return;
+    try {
+      const { ok, data } = await apiPost('/api/getUser', {}, await user.getIdToken());
+      if (ok && data.username && user.displayName !== data.username) {
+        await user.updateProfile({ displayName: data.username });
+      }
+    } catch (err) {
+      console.error('Error fetching user data:', err);
+    }
+  });
+
+  async function login() {
+    const email = loginEmailInput.value.trim();
+    const password = loginPasswordInput.value.trim();
+    if (!email || !password) return showCustomAlert('Bitte fülle alle Felder aus', 'error');
+    if (!(await verifyCaptcha('login'))) return;
+
+    try {
+      await auth.signInWithEmailAndPassword(email, password);
+      showCustomAlert('Login erfolgreich!', 'success');
+      redirectToProfile();
+    } catch (error) {
+      resetCaptcha();
+      let errorMessage = 'Login fehlgeschlagen!';
+      if (['auth/user-not-found', 'auth/wrong-password', 'auth/invalid-credential', 'auth/invalid-login-credentials'].includes(error.code)) {
+        errorMessage = 'E-Mail oder Passwort ist falsch!';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Ungültige E-Mail Adresse!';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Zu viele fehlgeschlagene Versuche. Bitte versuche es später erneut';
+      }
+      showCustomAlert(errorMessage, 'error');
+    }
+  }
+
+  async function register() {
+    const email = registerEmailInput.value.trim();
+    const password = registerPasswordInput.value.trim();
+    const username = registerUsernameInput.value.trim();
+
+    if (!email || !password || !username) return showCustomAlert('Bitte fülle alle Felder aus', 'error');
+    if (username.length < 3 || username.length > 12) return showCustomAlert('Benutzername muss 3-12 Zeichen lang sein', 'error');
+    if (!USERNAME_PATTERN.test(username)) return showCustomAlert('Benutzername darf nur Buchstaben, Zahlen und Unterstriche enthalten', 'error');
+    if (password.length < 6) return showCustomAlert('Passwort muss mindestens 6 Zeichen lang sein', 'error');
+
+    const check = await apiPost('/api/checkUsername', { username });
+    if (check.data.exists) return showCustomAlert('Benutzername ist bereits vergeben', 'error');
+    if (!(await verifyCaptcha('register'))) return;
+
+    let user;
+    try {
+      ({ user } = await auth.createUserWithEmailAndPassword(email, password));
+    } catch (error) {
+      resetCaptcha();
+      console.error('Registration error:', error);
+      let errorMessage = 'Registrierung fehlgeschlagen!';
+      if (error.code === 'auth/email-already-in-use') errorMessage = 'E-Mail Adresse wird bereits verwendet!';
+      else if (error.code === 'auth/weak-password') errorMessage = 'Passwort ist zu schwach!';
+      else if (error.code === 'auth/invalid-email') errorMessage = 'Ungültige E-Mail Adresse!';
+      return showCustomAlert(errorMessage, 'error');
+    }
+
+    const created = await apiPost('/api/createUser', { username }, await user.getIdToken());
+    if (!created.ok) {
+      // don't leave an account without data behind
+      await user.delete().catch(console.error);
+      resetCaptcha();
+      return showCustomAlert(created.status === 409 ? 'Benutzername ist bereits vergeben' : 'Registrierung fehlgeschlagen!', 'error');
+    }
+    await user.updateProfile({ displayName: created.data.username });
+    showCustomAlert('Registrierung erfolgreich!', 'success');
+    redirectToProfile();
+  }
+
+  if (form) {
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      if (authFlowInProgress) return;
+      authFlowInProgress = true;
+      try {
+        if (registerUsernameInput) await register();
+        else if (loginEmailInput && loginPasswordInput) await login();
+      } catch (error) {
+        console.error('Auth error:', error);
+        showCustomAlert('Etwas ist schiefgelaufen, bitte versuche es erneut', 'error');
+      } finally {
+        authFlowInProgress = false;
+      }
+    });
+  }
+
+  const providers = {
+    google: () => new firebase.auth.GoogleAuthProvider(),
+    twitter: () => new firebase.auth.TwitterAuthProvider(),
+    github: () => new firebase.auth.GithubAuthProvider(),
+    discord: () => new firebase.auth.OAuthProvider('oidc.discord')
   };
 
-  document.querySelectorAll('.signin').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (oauthLoginInProgress) return;
-      oauthLoginInProgress = true;
+  document.querySelectorAll('.signin').forEach((btn) => {
+    btn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      if (authFlowInProgress) return;
+      const icon = btn.querySelector('i');
+      const brand = Object.keys(providers).find((name) => icon?.classList.contains(`fa-${name}`));
+      if (!brand) return;
 
-      const brand = btn.querySelector('i')?.classList[1]?.split('-')[1];
-      const provider = oauthButtons[brand];
-      if (!provider) {
-        oauthLoginInProgress = false;
-        return;
-      }
-
-      showCustomAlert(`${brand} Login wird vorbereitet...`, "info");
-
+      authFlowInProgress = true;
+      showCustomAlert(`${brand} Login wird vorbereitet...`, 'info');
       try {
-        const { user } = await auth.signInWithPopup(provider);
+        const { user } = await auth.signInWithPopup(providers[brand]());
         const token = await user.getIdToken();
 
-        let currentName = user.displayName || user.email?.split('@')[0] || `user${Math.floor(100000 + Math.random() * 900000)}`;
-
-        // Check if user exists in database
-        const userRes = await fetch('/api/getUser', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ uid: user.uid })
-        });
-
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          currentName = userData.username || currentName;
-        } else {
-          await fetch('/api/createUser', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: user.uid,
-              username: currentName,
-              email: user.email || 'noemail'
-            })
-          });
+        let { ok, data } = await apiPost('/api/getUser', {}, token);
+        if (!ok) {
+          const wanted = user.displayName || (user.email ? user.email.split('@')[0] : '');
+          ({ ok, data } = await apiPost('/api/createUser', { username: wanted }, token));
+          if (!ok) throw new Error(data.message || 'Could not create user');
+        }
+        if (data.username && user.displayName !== data.username) {
+          await user.updateProfile({ displayName: data.username });
         }
 
-        if (user.displayName !== currentName) {
-          await user.updateProfile({ displayName: currentName });
-        }
-
-        setCookie('auth_token', token, 30);
-        showCustomAlert(`${brand} Login erfolgreich!`, "success");
-        setTimeout(() => {
-          window.location.href = '/profile';
-        }, 1500);
-
+        showCustomAlert(`${brand} Login erfolgreich!`, 'success');
+        redirectToProfile();
       } catch (error) {
         console.error('OAuth error:', error);
         let errorMessage = `${brand} Login fehlgeschlagen!`;
-        if (error.code === 'auth/popup-closed-by-user') {
-          errorMessage = "Login wurde abgebrochen";
+        if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+          errorMessage = 'Login wurde abgebrochen';
         } else if (error.code === 'auth/popup-blocked') {
-          errorMessage = "Popup wurde blockiert. Bitte erlaube Popups für diese Seite";
+          errorMessage = 'Popup wurde blockiert. Bitte erlaube Popups für diese Seite';
+        } else if (error.code === 'auth/account-exists-with-different-credential') {
+          errorMessage = 'Diese E-Mail ist bereits mit einer anderen Anmeldemethode verknüpft';
         }
-        showCustomAlert(errorMessage, "error");
-        oauthLoginInProgress = false;
+        showCustomAlert(errorMessage, 'error');
+      } finally {
+        authFlowInProgress = false;
       }
     });
   });

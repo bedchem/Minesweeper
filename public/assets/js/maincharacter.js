@@ -1,133 +1,90 @@
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
   const userIcon = document.getElementById('userIcon');
   const userDropdown = document.getElementById('userDropdown');
   const dropdownEmail = document.getElementById('dropdownEmail');
   const signInBtn = document.getElementById('signInBtn');
   const logoutBtn = document.getElementById('dropdownLogout');
+  const statsBtn = document.getElementById('dropdownStats');
+  const headerAvatar = document.getElementById('headerAvatar');
+  const dropdownAvatar = document.getElementById('dropdownAvatar');
 
-  firebase.auth().onAuthStateChanged(function(user) {
-    if (user) {
-      userIcon.style.display = 'flex';
-      signInBtn.style.display = 'none';
-      dropdownEmail.textContent = user.displayName || '';
+  function showSignedOut() {
+    userIcon.style.display = 'none';
+    userDropdown.classList.remove('active');
+    signInBtn.style.display = 'inline-block';
+    dropdownEmail.textContent = '';
+  }
 
-      const statsBtn = document.getElementById('dropdownStats');
-      if (user.displayName) {
-        statsBtn.href = `/stats`; 
-      } else {
-        statsBtn.href = '#';
-        statsBtn.addEventListener('click', function(e) {
-          e.preventDefault();
-          alert('No username set... weird... report it.');
-        });
-      }
+  if (statsBtn) {
+    statsBtn.href = '/stats';
+    statsBtn.addEventListener('click', function (e) {
+      if (firebase.auth().currentUser?.displayName) return;
+      e.preventDefault();
+      if (typeof showCustomAlert === 'function') showCustomAlert('No username set... weird... report it.', 'error');
+    });
+  }
 
-      const myStatsBtn = document.getElementById("myStatsBtn");
-      if (myStatsBtn) {
-        myStatsBtn.style.display = 'inline-block'; 
-        myStatsBtn.onclick = () => {
-          window.location.href = `/stats/${encodeURIComponent(user.displayName)}`;
-        };
-      }
+  firebase.auth().onAuthStateChanged(function (user) {
+    if (!user) return showSignedOut();
 
-      const headerAvatar = document.getElementById('headerAvatar');
-      const headerAvatarFallback = document.getElementById('headerAvatarFallback');
-      const dropdownAvatar = document.getElementById('dropdownAvatar');
-      const dropdownAvatarFallback = document.getElementById('dropdownAvatarFallback');
-      
-      if (user.uid) {
-        const png = `/profile_pics/${user.uid}.png?v=${Date.now()}`;
-        const jpg = `/profile_pics/${user.uid}.jpg?v=${Date.now()}`;
-        
-        fetch(png, { method: 'HEAD' }).then(r => {
-          if (r.ok) {
-            if (headerAvatar) { 
-              headerAvatar.src = png; 
-              headerAvatar.style.display = 'inline-block'; 
-            }
-            if (headerAvatarFallback) headerAvatarFallback.style.display = 'none';
-            if (dropdownAvatar) { 
-              dropdownAvatar.src = png;  
-              dropdownAvatar.style.display = 'inline-block'; 
-            }
-            if (dropdownAvatarFallback) dropdownAvatarFallback.style.display = 'none';
-          } else {
-            fetch(jpg, { method: 'HEAD' }).then(r2 => {
-              if (r2.ok) {
-                if (headerAvatar) { 
-                  headerAvatar.src = jpg; 
-                  headerAvatar.style.display = 'inline-block'; 
-                }
-                if (headerAvatarFallback) headerAvatarFallback.style.display = 'none';
-                if (dropdownAvatar) { 
-                  dropdownAvatar.src = jpg; 
-                  dropdownAvatar.style.display = 'inline-block'; 
-                }
-                if (dropdownAvatarFallback) dropdownAvatarFallback.style.display = 'none';
-              } else {
-                showFallbackAvatar();
-              }
-            }).catch(() => {
-              showFallbackAvatar();
-            });
-          }
-        }).catch(() => {
-          showFallbackAvatar();
-        });
-      } else {
-        userIcon.style.display = 'none';
-        userDropdown.classList.remove('active');
-        signInBtn.style.display = 'inline-block';
-        dropdownEmail.textContent = '';
-      }
+    userIcon.style.display = 'flex';
+    signInBtn.style.display = 'none';
+    dropdownEmail.textContent = user.displayName || '';
 
-      function showFallbackAvatar() {
+    const myStatsBtn = document.getElementById('myStatsBtn');
+    if (myStatsBtn && user.displayName) {
+      myStatsBtn.style.display = 'inline-block';
+      myStatsBtn.onclick = () => {
+        window.location.href = `/stats/${encodeURIComponent(user.displayName)}`;
+      };
+    }
 
-        const fallbackImageUrl = '/assets/images/icon.png';
-
-        if (headerAvatar) {
-          headerAvatar.src = fallbackImageUrl;
-          headerAvatar.style.display = 'inline-block';
-        }
-        if (dropdownAvatar) {
-          dropdownAvatar.src = fallbackImageUrl;
-          dropdownAvatar.style.display = 'inline-block';
-        }
-
-        if (headerAvatarFallback) headerAvatarFallback.style.display = 'none';
-        if (dropdownAvatarFallback) dropdownAvatarFallback.style.display = 'none';
-      }
-    } else {
-      userIcon.style.display = 'none';
-      userDropdown.classList.remove('active');
-      signInBtn.style.display = 'inline-block';
-      dropdownEmail.textContent = '';
+    const avatar = `/avatar/${encodeURIComponent(user.uid)}`;
+    for (const img of [headerAvatar, dropdownAvatar]) {
+      if (!img) continue;
+      img.src = avatar;
+      img.style.display = 'inline-block';
     }
   });
 
-  userIcon.addEventListener('click', function(e) {
+  userIcon.addEventListener('click', function (e) {
     userDropdown.classList.toggle('active');
     e.stopPropagation();
   });
 
-  document.addEventListener('click', function(e) {
-    if (!userDropdown.contains(e.target) && !userIcon.contains(e.target)) {
-      userDropdown.classList.remove('active');
-    }
+  document.addEventListener('click', function (e) {
+    if (!userDropdown.contains(e.target) && !userIcon.contains(e.target)) userDropdown.classList.remove('active');
   });
 
-  logoutBtn.addEventListener('click', function(e) {
+  logoutBtn.addEventListener('click', function (e) {
     e.preventDefault();
-    firebase.auth().signOut().then(function() {
+    firebase.auth().signOut().then(function () {
       userDropdown.classList.remove('active');
       location.reload();
     });
   });
 
-  const backButton = document.getElementById('backButtonIndex');
-  if (backButton) {
-    backButton.onclick = () => {
-      window.location.href = '/';
-    };
+  const backButtonIndex = document.getElementById('backButtonIndex');
+  if (backButtonIndex) {
+    backButtonIndex.onclick = () => { window.location.href = '/'; };
+  }
+
+  const backButton = document.getElementById('backButton');
+  if (backButton && !backButton.onclick) {
+    backButton.addEventListener('click', () => {
+      let referrer = null;
+      try {
+        referrer = document.referrer ? new URL(document.referrer) : null;
+      } catch {
+        referrer = null;
+      }
+      const section = referrer ? referrer.pathname.split('/')[1].replace(/\.html$/, '') : '';
+      const forbidden = ['lobby', 'register', 'login'];
+      if (referrer && referrer.origin === window.location.origin && !forbidden.includes(section)) {
+        window.history.back();
+      } else {
+        window.location.href = '/';
+      }
+    });
   }
 });

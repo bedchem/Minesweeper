@@ -3,9 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- Title & Description -->
   <title>Minesweeper Multiplayer – Spiele online mit Freunden | Create a Lobby</title>
@@ -47,16 +44,16 @@
   }
   </script>
 
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha384-nRgPTkuX86pH8yjPJUAFuASXQSSl2/bBUiNV47vSYpKFxHJhbcrGnmlYpYJMeD7a" crossorigin="anonymous">
   <link rel="stylesheet" href="/assets/css/style.css">
-  <link rel="icon" type="image/png" href="assets/images/minesweeperlogo.png">
-  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
-  <script src="assets/js/firebase-auth.js"></script>
+  <link rel="icon" type="image/png" href="/assets/images/minesweeperlogo.png">
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-app-compat.js" integrity="sha384-yv+ZUv/KyryBDNR7YidkLtr/oFDx0uwomSfUCO6neJglg17CDzXceDp8+BdqbvkD" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-auth-compat.js" integrity="sha384-DCSLUn2bWnL7yjZ+41b+hX4KdGS4F4auH9Q8zTeRYxSeGJPCc9QgCI4/buENd5Fp" crossorigin="anonymous"></script>
+  <script src="/assets/js/firebase-auth.js"></script>
   <script src="/assets/js/cookies.js"></script>
   <script src="/assets/js/alert.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cookieconsent@3/build/cookieconsent.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cookieconsent@3/build/cookieconsent.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.js" integrity="sha384-xLPjH6nqG4p/2mu1KJ1t+4KqcvkyXVwBucQtyGK65lDNfKzECxGY/QEYWR+Wompr" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.css" integrity="sha384-nA7usz4cMKo7RylsCZnpe0V9qx5X7sa011o0OrDzrKUE7Ero1gB48Fjaw6SFxVZe" crossorigin="anonymous">
 
 </head>
 <body>
@@ -67,7 +64,7 @@
     </a>    <div class="header-subtitle">MINESWEEPER selection</div>
 <div class="user-menu-wrapper" id="userMenuWrapper">
     <div class="user-icon" id="userIcon" style="display:none;">
-        <img id="headerAvatar" src="./assets/images/icon.png" alt="avatar" style="margin-top:0px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+        <img id="headerAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:0px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
         <i id="headerAvatarFallback" style="font-size:36px;"></i>
     </div>
     <div class="user-dropdown" id="userDropdown">
@@ -75,7 +72,7 @@
             <p class="dropdown-signed">Signed in as</p>
             <div class="dropdown-user">
                 <div class="dropdown-avatar">
-                    <img id="dropdownAvatar" src="./assets/images/icon.png" alt="avatar" style="margin-top:50px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+                    <img id="dropdownAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:50px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
                 </div>
                 <p class="dropdown-email" id="dropdownEmail" style="margin-top:50px;"></p>
             </div>
@@ -130,20 +127,6 @@
     <input type="number" id="playerCount" min="2" max="4" value="2">
     <button id="confirmCreate">Create Lobby</button>
     <button id="exitmodalD">Cancel</button>
-
-    <script>
-    const input = document.getElementById("playerCount");
-
-    input.addEventListener("input", () => {
-      const min = parseInt(input.min);
-      const max = parseInt(input.max);
-      let val = parseInt(input.value);
-
-      if (isNaN(val)) return;
-      if (val < min) input.value = min;
-      if (val > max) input.value = max;
-    });
-    </script>
   </div>
 </div>
 
@@ -172,7 +155,7 @@
       width="16"
       height="19"
       viewBox="0 0 16 19"
-      fill="nones"
+      fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
       <circle cx="1.61321" cy="1.61321" r="1.5" fill="black"></circle>
@@ -192,7 +175,7 @@
   <script src="/assets/js/lobbycreation.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/assets/js/main.js"></script>
-  <script src="assets/js/maincharacter.js"></script>
+  <script src="/assets/js/maincharacter.js"></script>
 
 </body>
 </html>

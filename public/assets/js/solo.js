@@ -1,6 +1,9 @@
 const DEFAULT_GRID_WIDTH = 10;
 const DEFAULT_GRID_HEIGHT = 10;
 const DEFAULT_MINE_COUNT = 15;
+const MIN_SIZE = 5;
+const MAX_SIZE = 25;
+const SAFE_AREA = 9;
 
 let GRID_WIDTH = DEFAULT_GRID_WIDTH;
 let GRID_HEIGHT = DEFAULT_GRID_HEIGHT;
@@ -19,25 +22,26 @@ let gameTime = 0;
 let leftMouseDown = false;
 let rightMouseDown = false;
 
-async function saveSoloGameResult(won, time, mineHits) {
-    if (GRID_WIDTH < 10 || GRID_HEIGHT < 10 || MINE_COUNT < 15) return;
+async function saveSoloGameResult(won, time) {
+    if (GRID_WIDTH < DEFAULT_GRID_WIDTH || GRID_HEIGHT < DEFAULT_GRID_HEIGHT || MINE_COUNT < DEFAULT_MINE_COUNT) return;
     const user = firebase.auth().currentUser;
     if (!user) return;
     try {
         const token = await user.getIdToken();
-        const result = { won, time, width: GRID_WIDTH, height: GRID_HEIGHT, mines: MINE_COUNT, mineHits };
-        await fetch('/api/saveSoloGame', {
+        const result = { won, time, width: GRID_WIDTH, height: GRID_HEIGHT, mines: MINE_COUNT };
+        const response = await fetch('/api/saveSoloGame', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, result })
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ result })
         });
+        if (!response.ok) console.error('Failed to save solo game result:', response.status);
     } catch (err) {
         console.error("Failed to save solo game result:", err);
     }
 }
 
 async function getBestTime() {
-    if (GRID_WIDTH !== DEFAULT_GRID_WIDTH || GRID_HEIGHT !== DEFAULT_GRID_HEIGHT || MINE_COUNT !== DEFAULT_MINE_COUNT) return null;
+    if (!isRankedBoard()) return null;
     const user = firebase.auth().currentUser;
     if (!user) return null;
     try {
@@ -167,7 +171,7 @@ function handleLeftClick(x, y) {
         revealFullGrid();
         gameTime = Math.floor((Date.now() - startTime) / 1000);
         showWinModal(gameTime, false);
-        saveSoloGameResult(false, null, 1);
+        saveSoloGameResult(false, null);
         return;
     }
 
@@ -237,26 +241,27 @@ function checkWin() {
         clearInterval(timerInterval);
         gameTime = Math.floor((Date.now() - startTime) / 1000);
         showWinModal(gameTime, true);
-        saveSoloGameResult(true, gameTime, 0);
+        saveSoloGameResult(true, gameTime);
     }
 }
 
 async function showWinModal(timeTaken, won = true) {
-    let bestTime = await getBestTime();
-    if (won && (!bestTime || timeTaken < bestTime)) {
-        bestTime = timeTaken;
-        await saveBestTime(timeTaken);
-    }
-
     const winTime = document.getElementById('winTime');
     const bestTimeElement = document.getElementById('bestTime');
     const winMessage = document.getElementById('winMessage');
     const soloWinModal = document.getElementById('soloWinModal');
 
     if (winTime) winTime.textContent = timeTaken;
-    if (bestTimeElement) bestTimeElement.textContent = bestTime || 'N/A';
     if (winMessage) winMessage.textContent = won ? '🎉 WIN!' : '💥 LOST!';
     if (soloWinModal) soloWinModal.style.display = 'flex';
+
+    let bestTime = await getBestTime();
+    if (won && isRankedBoard() && (bestTime === null || timeTaken < bestTime)) bestTime = timeTaken;
+    if (bestTimeElement) bestTimeElement.textContent = bestTime ?? 'N/A';
+}
+
+function isRankedBoard() {
+    return GRID_WIDTH === DEFAULT_GRID_WIDTH && GRID_HEIGHT === DEFAULT_GRID_HEIGHT && MINE_COUNT === DEFAULT_MINE_COUNT;
 }
 
 function revealFullGrid() {
@@ -323,7 +328,7 @@ function installChordHandlers() {
             revealFullGrid();
             gameTime = Math.floor((Date.now() - startTime) / 1000);
             showWinModal(gameTime, false);
-            saveSoloGameResult(false, null, 1);
+            saveSoloGameResult(false, null);
             return;
         }
 
@@ -423,8 +428,9 @@ function applySettings() {
     const m = parseInt(document.getElementById('inputMines').value);
 
     if (isNaN(w) || isNaN(h) || isNaN(m)) { showCustomAlert('Put in a number'); return; }
-    if (w < 5 || w > 25 || h < 5 || h > 25) { showCustomAlert('Width/Height: 5–25'); return; }
-    if (m < 1 || m >= w * h) { showCustomAlert('MORE MINESS!'); return; }
+    if (w < MIN_SIZE || w > MAX_SIZE || h < MIN_SIZE || h > MAX_SIZE) { showCustomAlert(`Width/Height: ${MIN_SIZE}–${MAX_SIZE}`); return; }
+    if (m < 1) { showCustomAlert('MORE MINESS!'); return; }
+    if (m > w * h - SAFE_AREA) { showCustomAlert(`Too many mines (max. ${w * h - SAFE_AREA})`); return; }
 
     GRID_WIDTH = w; GRID_HEIGHT = h; MINE_COUNT = m;
     flagsLeft = MINE_COUNT;

@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.body.appendChild(overlay);
 
     document.getElementById('popupLogin').onclick = function () {
-      window.location.href = '/login.html';
+      window.location.href = '/login';
     };
     document.getElementById('popupCancel').onclick = function () {
       window.location.href = '/';
