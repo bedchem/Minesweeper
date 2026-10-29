@@ -3220,6 +3220,18 @@ width: 250px;
   100% { transform: scale(1); }
 }
 
+.progress-container {
+  position: relative;
+}
+
+/* floats over the progress bar instead of pushing the board down */
+.penalty-animation {
+  position: absolute;
+  right: 0;
+  top: 0;
+  pointer-events: none;
+}
+
 @keyframes floatUp {
   0% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-20px); }

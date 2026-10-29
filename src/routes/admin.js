@@ -15,6 +15,9 @@ function createAdminRouter(ctx) {
   router.use(auth.requireAuth, auth.loadUser, auth.requireAdmin);
 
   const adminName = req => req.user.username;
+  // ADMIN_UIDS admins can only be edited by themselves or other ADMIN_UIDS admins
+  const isRoot = uid => config.adminUids.includes(uid);
+  const protectedFrom = (req, uid) => isRoot(uid) && !isRoot(req.user.uid);
   const userRow = user => ({
     uid: user.uid,
     username: user.username,
@@ -71,6 +74,7 @@ function createAdminRouter(ctx) {
     const { uid } = req.params;
     const user = isValidUid(uid) ? userStore.get(uid) : null;
     if (!user) return fail(res, 404, 'User not found');
+    if (protectedFrom(req, uid)) return fail(res, 403, 'Forbidden');
 
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : user.username;
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : user.email;
@@ -88,6 +92,7 @@ function createAdminRouter(ctx) {
         if (err?.code !== 'auth/user-not-found') return fail(res, 400, cleanText(err?.message ?? 'Could not update email', 200));
       }
     }
+    const renamed = username !== user.username;
     await userStore.update(uid, u => {
       if (username !== u.username) {
         u.nameHistory.push({ name: u.username, changedAt: new Date().toISOString(), by: 'admin' });
@@ -96,6 +101,7 @@ function createAdminRouter(ctx) {
       u.email = email;
       u.role = role;
     });
+    if (renamed) lobbyManager.renameUser(uid, username);
     activity.add(adminName(req), `Benutzer "${username}" bearbeitet`);
     res.json(userRow(userStore.get(uid)));
   });
@@ -105,6 +111,7 @@ function createAdminRouter(ctx) {
     const user = isValidUid(uid) ? userStore.get(uid) : null;
     if (!user) return fail(res, 404, 'User not found');
     if (uid === req.user.uid) return fail(res, 400, 'You cannot delete your own account here');
+    if (protectedFrom(req, uid)) return fail(res, 403, 'Forbidden');
     try {
       await firebaseAuth.deleteUser(uid);
     } catch (err) {

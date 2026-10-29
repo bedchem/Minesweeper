@@ -5,6 +5,8 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { isValidUid } = require('./validation');
 
+const MAX_GAME_HISTORY = 10_000;
+
 class UserStore {
   #dir;
   #logger;
@@ -107,7 +109,10 @@ class UserStore {
 
   async addGameResult(uid, result) {
     if (!this.#users.has(uid)) return false;
-    await this.update(uid, user => user.gameHistory.push(result));
+    await this.update(uid, user => {
+      user.gameHistory.push(result);
+      if (user.gameHistory.length > MAX_GAME_HISTORY) user.gameHistory.splice(0, user.gameHistory.length - MAX_GAME_HISTORY);
+    });
     return true;
   }
 

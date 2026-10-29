@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const express = require('express');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { fail, verifyRecaptcha } = require('../auth');
@@ -68,7 +69,7 @@ function uniqueUsername(userStore, wanted) {
 function createApiRouter(ctx) {
   const { config, userStore, lobbyManager, io, auth, firebaseAuth, activity, logger } = ctx;
   const router = express.Router();
-  const { requireAuth, loadUser } = auth;
+  const { requireAuth, requireFreshAuth, loadUser } = auth;
 
   const publicLimit = limiter(300, 60_000, req => ipKeyGenerator(req.ip));
   const accountLimit = limiter(30, 15 * 60_000, uidKey);
@@ -79,6 +80,8 @@ function createApiRouter(ctx) {
     const key = `${type}:${days ?? 'all'}`;
     const hit = leaderboardCache.get(key);
     if (hit && hit.version === userStore.version && Date.now() - hit.at < 60_000) return hit.data;
+    // entries of an older store version are stale anyway; the size cap keeps odd timeRange values from piling up
+    if (leaderboardCache.size >= 32 || (hit && hit.version !== userStore.version)) leaderboardCache.clear();
     const data = buildLeaderboard(userStore.all(), type, days);
     leaderboardCache.set(key, { version: userStore.version, at: Date.now(), data });
     return data;
@@ -151,7 +154,7 @@ function createApiRouter(ctx) {
     res.json(publicUser(req.user, auth.isAdmin(req.user)));
   });
 
-  router.post('/api/createUser', requireAuth, accountLimit, async (req, res) => {
+  router.post('/api/createUser', requireFreshAuth(), accountLimit, async (req, res) => {
     const { uid, email = null, firebase } = req.auth;
     if (userStore.get(uid)) return fail(res, 400, 'User already exists');
 
@@ -162,6 +165,16 @@ function createApiRouter(ctx) {
       if (userStore.isUsernameTaken(username)) return fail(res, 409, 'Username already taken');
     } else {
       username = uniqueUsername(userStore, requested || email?.split('@')[0]);
+    }
+
+    if (config.recaptchaSecrets.register && firebase?.sign_in_provider === 'password') {
+      const token = req.body?.captchaToken;
+      if (typeof token !== 'string' || !token || token.length > 4096) return fail(res, 400, 'Captcha required', { code: 'captcha' });
+      const result = await verifyRecaptcha(token, config.recaptchaSecrets.register, req.ip).catch(err => {
+        logger.error('reCAPTCHA verification error:', err);
+        return null;
+      });
+      if (!result?.success) return fail(res, 400, 'Captcha validation failed', { code: 'captcha' });
     }
 
     try {
@@ -208,10 +221,12 @@ function createApiRouter(ctx) {
       if (err.message === 'Username taken') return fail(res, 409, 'Username already taken');
       throw err;
     }
+    if (renaming) lobbyManager.renameUser(user.uid, newUsername);
     res.json({ message: 'User updated successfully', username: newUsername });
   });
 
-  router.post('/api/deleteUser', requireAuth, accountLimit, async (req, res) => {
+  // a retry after a half-finished delete (Firebase account already gone) must still clean up the local data
+  router.post('/api/deleteUser', requireFreshAuth({ allowDeleted: true }), accountLimit, async (req, res) => {
     const { uid, auth_time: authTime } = req.auth;
     if (!authTime || Date.now() / 1000 - authTime > RECENT_LOGIN_SECONDS) {
       return fail(res, 403, 'Please log in again to delete your account', { code: 'requires-recent-login' });
@@ -243,7 +258,7 @@ function createApiRouter(ctx) {
     await fsp.mkdir(config.profilePicsDir, { recursive: true });
     await removeAvatar(config.profilePicsDir, uid);
     const file = path.join(config.profilePicsDir, `${uid}.${ext}`);
-    const tmp = `${file}.${process.pid}.tmp`;
+    const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
     await fsp.writeFile(tmp, buffer);
     await fsp.rename(tmp, file);
     res.json({ url: `/avatar/${uid}` });

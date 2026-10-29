@@ -31,16 +31,16 @@ function sanitizeUsername(value) {
   return cleaned.length >= USERNAME_MIN ? cleaned : `user${randomInt(100000, 1000000)}`;
 }
 
-const UNSAFE_CHARS = new RegExp(
-  '[' + [[0x00, 0x1f], [0x7f, 0x9f], [0x200b, 0x200f], [0x2028, 0x202e], [0x2066, 0x2069]]
-    .map(([from, to]) => `\\u${from.toString(16).padStart(4, '0')}-\\u${to.toString(16).padStart(4, '0')}`)
-    .join('') + ']',
-  'g'
-);
+// control, format (zero-width, bidi), line/paragraph separators and the "blank" Hangul/Braille fillers.
+// ZWJ, ZWNJ and the emoji tag characters stay: emoji sequences, subdivision flags and some scripts need them,
+// and they can't reorder text.
+const UNSAFE_CHARS = /(?![\u200C\u200D\u{E0020}-\u{E007F}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u2800\u3164\uFFA0]/gu;
+const INVISIBLE_ONLY = /^[\s\u200C\u200D\u{E0020}-\u{E007F}]*$/u;
 
 function cleanText(value, maxLength) {
   if (typeof value !== 'string') return '';
-  return value.replace(UNSAFE_CHARS, '').trim().slice(0, maxLength);
+  const text = value.replace(UNSAFE_CHARS, '').trim().slice(0, maxLength);
+  return INVISIBLE_ONLY.test(text) ? '' : text;
 }
 
 function toInt(value) {

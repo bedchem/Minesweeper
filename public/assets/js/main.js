@@ -21,6 +21,8 @@ let spectateTimerInterval = null;
 let disconnectModalInterval = null;
 let disconnectCountdown = 10;
 const playerNames = new Map();
+// players the server is waiting for while the game is paused
+const pausedFor = new Set();
 
 const gameTimer = {
   startTime: null,
@@ -36,7 +38,8 @@ const LOBBY_ERRORS = {
   'Lobby full': 'lobby_full',
   'Name taken': 'name_taken',
   'Game in progress': 'game_in_progress',
-  'Lobby closed': 'lobby_closed'
+  'Lobby closed': 'lobby_closed',
+  'You are already in too many lobbies': 'too_many_lobbies'
 };
 
 const LOBBY_ERROR_TEXT = {
@@ -44,7 +47,8 @@ const LOBBY_ERROR_TEXT = {
   lobby_full: () => 'Lobby is full',
   name_taken: () => 'Name is already taken in this lobby',
   game_in_progress: () => 'This game has already started',
-  lobby_closed: () => 'The lobby was closed'
+  lobby_closed: () => 'The lobby was closed',
+  too_many_lobbies: () => 'You are already in too many lobbies'
 };
 
 const isLobbyCreationPage = /^\/lobbycreation(\.html)?\/?$/.test(window.location.pathname);
@@ -87,9 +91,19 @@ firebase.auth().onAuthStateChanged((user) => {
   }
 });
 
+// socket.io keeps retrying on its own; tell the player once instead of leaving the page silently waiting
+let retryNoticeShown = false;
+socket.on('connect', () => {
+  retryNoticeShown = false;
+});
+
 socket.on('connect_error', (err) => {
   console.error('Socket connection failed:', err.message);
-  if (socket.active) return;
+  if (socket.active) {
+    if (!retryNoticeShown) notify('Cannot reach the game server, retrying...', 'info');
+    retryNoticeShown = true;
+    return;
+  }
   notify(err.message === 'User data not found'
     ? 'Your account data was not found. Please log in again.'
     : 'Could not connect to the game server. Please reload the page.');
@@ -102,7 +116,7 @@ function showLobbyErrorFromUrl(codeError) {
   const error = params.get('error');
   if (!error || !codeError) return;
   const code = (params.get('code') || '').toUpperCase();
-  const text = LOBBY_ERROR_TEXT[error];
+  const text = Object.hasOwn(LOBBY_ERROR_TEXT, error) ? LOBBY_ERROR_TEXT[error] : null;
   if (text) codeError.textContent = text(validateCode(code) ? code : '');
   window.history.replaceState({}, document.title, window.location.pathname);
 }
@@ -138,6 +152,13 @@ function initLobbyCreationPage() {
   const difficultyModal = document.getElementById('difficultyModal');
   const browserModal = document.getElementById('lobbyBrowserModal');
   const playerCountInput = document.getElementById('playerCount');
+  const confirmCreate = document.getElementById('confirmCreate');
+  // one create at a time: a second create would replace the lobby we are about to be redirected to
+  let creating = false;
+  const setCreating = (value) => {
+    creating = value;
+    confirmCreate.disabled = value;
+  };
 
   showLobbyErrorFromUrl(codeError);
 
@@ -145,7 +166,15 @@ function initLobbyCreationPage() {
     window.location.href = `/lobby/${encodeURIComponent(code)}`;
   });
   socket.on('lobbyError', (message) => {
+    setCreating(false);
     codeError.textContent = message;
+  });
+  socket.on('connect_error', () => {
+    if (!socket.active) setCreating(false);
+  });
+  // coming back with the browser's back button restores the page as it was left
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) setCreating(false);
   });
 
   codeInput.addEventListener('input', () => {
@@ -178,9 +207,12 @@ function initLobbyCreationPage() {
   document.getElementById('createLobby').addEventListener('click', () => difficultyModal.classList.add('visible'));
   document.getElementById('exitmodalD').addEventListener('click', () => difficultyModal.classList.remove('visible'));
 
-  document.getElementById('confirmCreate').addEventListener('click', async () => {
+  confirmCreate.addEventListener('click', async () => {
+    if (creating) return;
+    setCreating(true);
     const difficulty = document.getElementById('difficultySelect').value;
     const playerCount = parseInt(playerCountInput.value, 10);
+    codeError.textContent = '';
     await waitForUsername();
     socket.emit('createLobby', { difficulty, playerCount });
     difficultyModal.classList.remove('visible');
@@ -232,9 +264,15 @@ function initLobbyPage() {
   }
 
   socket.on('connect', () => socket.emit('joinLobby', { code }));
+  // the server throttled us (e.g. many reloads); joining again also restarts a reconnect into a running game
+  socket.on('lobbyRetry', (ms) => {
+    setTimeout(() => {
+      if (socket.connected) socket.emit('joinLobby', { code });
+    }, Math.max(500, Number(ms) || 2000));
+  });
 
   socket.on('lobbyError', (message) => {
-    const error = LOBBY_ERRORS[message];
+    const error = Object.hasOwn(LOBBY_ERRORS, message) ? LOBBY_ERRORS[message] : null;
     if (!error) return notify(message);
     window.location.href = `/lobbycreation?error=${error}&code=${encodeURIComponent(code)}`;
   });
@@ -260,6 +298,7 @@ function initLobbyPage() {
   socket.on('spectateUpdate', handleSpectateUpdate);
   socket.on('gamePaused', handleGamePaused);
   socket.on('gameResumed', handleGameResumed);
+  socket.on('playerReconnected', ({ playerId }) => stopWaitingFor(playerId));
   socket.on('playerDisconnected', handlePlayerDisconnected);
   socket.on('reconnectGameData', reconnectGameHandler);
 }
@@ -579,7 +618,8 @@ function handlePlayerStatusChanged({ playerId, status }) {
 
 function handleIntermediatePodium({ playingPlayers }) {
   alivePlayers = playingPlayers.filter((p) => p.id !== myId);
-  if (playerStatus === 'alive' || spectating) return;
+  // a reloaded page shows the Reconnect button first, nothing may cover it
+  if (playerStatus === 'alive' || spectating || !document.getElementById('gameContainer')) return;
   const modal = document.getElementById('intermediatePodiumModal');
   if (!modal || modal.classList.contains('visible')) return;
   modal.classList.add('visible');
@@ -615,6 +655,7 @@ function handleSpectateUpdate({ rows: r, cols: c, cells, flags, time, flagsLeft 
 
 function handleGameOver({ results, grid }) {
   playerStatus = 'over';
+  pausedFor.clear();
   stopTimer();
   clearInterval(spectateTimerInterval);
   hideDisconnectModal();
@@ -638,19 +679,29 @@ function handleGameOver({ results, grid }) {
 }
 
 function handleGamePaused({ playerId, timeout }) {
+  pausedFor.add(playerId);
   pauseTimer();
-  showDisconnectModal(getPlayerName(playerId), timeout);
+  // a reloaded page shows the Reconnect button first, the modal must not cover it
+  if (document.getElementById('gameContainer')) showDisconnectModal(timeout);
 }
 
 function handleGameResumed() {
+  pausedFor.clear();
   resumeTimer();
   hideDisconnectModal();
+}
+
+// someone the game waited for is back or forfeited; the game itself resumes only on gameResumed
+function stopWaitingFor(playerId) {
+  if (!pausedFor.delete(playerId)) return;
+  if (pausedFor.size === 0) hideDisconnectModal();
+  else updateDisconnectTitle();
 }
 
 function handlePlayerDisconnected({ playerId, timeout }) {
   if (!timeout) return;
   console.log(`${getPlayerName(playerId)} did not reconnect in time`);
-  hideDisconnectModal();
+  stopWaitingFor(playerId);
 }
 
 function reconnectGameHandler(data) {
@@ -685,7 +736,7 @@ function reconnectGameHandler(data) {
   }
 }
 
-function showDisconnectModal(playerName, timeout) {
+function showDisconnectModal(timeout) {
   hideDisconnectModal();
   const modal = el('div', 'modal');
   modal.id = 'disconnectModal';
@@ -694,20 +745,25 @@ function showDisconnectModal(playerName, timeout) {
   countdown.id = 'disconnectCountdown';
   const waiting = el('p');
   waiting.append('Waiting ', countdown, ' seconds...');
-  content.append(el('h2', '', `${playerName} disconnected`), waiting, el('p', '', 'Game is paused'));
+  const title = el('h2');
+  title.id = 'disconnectTitle';
+  content.append(title, waiting, el('p', '', 'Game is paused'));
   modal.append(content);
   document.body.append(modal);
+  updateDisconnectTitle();
 
   disconnectCountdown = timeout;
   updateDisconnectCountdown();
+  // only counts down; the server decides when the game goes on (gameResumed)
   disconnectModalInterval = setInterval(() => {
-    disconnectCountdown--;
+    if (disconnectCountdown > 0) disconnectCountdown--;
     updateDisconnectCountdown();
-    if (disconnectCountdown <= 0) {
-      resumeTimer();
-      hideDisconnectModal();
-    }
   }, 1000);
+}
+
+function updateDisconnectTitle() {
+  const title = document.getElementById('disconnectTitle');
+  if (title) title.textContent = `${[...pausedFor].map(getPlayerName).join(', ')} disconnected`;
 }
 
 function updateDisconnectCountdown() {

@@ -2,7 +2,7 @@
 
 const { randomInt } = require('node:crypto');
 const ms = require('./minesweeper');
-const { RateLimiter } = require('./activityLog');
+const { KeyedRateLimiter, RateLimiter } = require('./activityLog');
 const { cleanText, normalizeLobbyCode, toInt } = require('./validation');
 
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -10,16 +10,26 @@ const CHAT_HISTORY = 50;
 const CHAT_MAX_LENGTH = 300;
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 4;
+const MAX_HOSTED_LOBBIES = 3;
+const MAX_SEATS = 3;
+const MAX_PAUSES = 2;
 
 const ERR = Object.freeze({
   notFound: 'Lobby not found',
   full: 'Lobby full',
   inProgress: 'Game in progress',
   closed: 'Lobby closed',
-  busy: 'Server busy'
+  busy: 'Server busy',
+  tooMany: 'You already have too many open lobbies',
+  tooManySeats: 'You are already in too many lobbies',
+  slowDown: 'Too many requests, please wait a moment'
 });
 
+const RETRY_MS = 2000;
+
 class LobbyManager {
+  #chatLimiter = new KeyedRateLimiter(5, 5000);
+
   constructor({ io, userStore, activity, logger = console, timings }) {
     this.io = io;
     this.userStore = userStore;
@@ -27,6 +37,7 @@ class LobbyManager {
     this.logger = logger;
     this.timings = timings;
     this.lobbies = new Map();
+    this.lobbyLimiter = new KeyedRateLimiter(20, 10_000);
   }
 
   #socketOf(member) {
@@ -76,11 +87,24 @@ class LobbyManager {
     return [...indices].map(i => ms.toCell(board, i));
   }
 
+  #anyoneConnected(lobby) {
+    return [...lobby.members.values()].some(m => m.connected);
+  }
+
   createLobby(host, { difficulty, playerCount }) {
     const maxPlayers = toInt(playerCount);
     if (maxPlayers === null || maxPlayers < MIN_PLAYERS || maxPlayers > MAX_PLAYERS) {
       return { error: `Player count must be between ${MIN_PLAYERS} and ${MAX_PLAYERS}` };
     }
+
+    // lobbies the host created but nobody is in anymore are replaced, so one account can't fill up the server
+    let hosted = 0;
+    for (const lobby of [...this.lobbies.values()]) {
+      if (lobby.hostUid !== host.uid) continue;
+      if (lobby.status !== 'playing' && !this.#anyoneConnected(lobby)) this.#deleteLobby(lobby);
+      else hosted++;
+    }
+    if (hosted >= MAX_HOSTED_LOBBIES) return { error: ERR.tooMany };
     if (this.lobbies.size >= this.timings.maxLobbies) return { error: ERR.busy };
     const code = this.#generateCode();
     if (!code) return { error: ERR.busy };
@@ -89,16 +113,28 @@ class LobbyManager {
       code,
       hostUid: host.uid,
       hostName: host.name,
-      difficulty: Object.hasOwn(ms.DIFFICULTIES, difficulty) ? difficulty : 'easy',
+      difficulty: typeof difficulty === 'string' && Object.hasOwn(ms.DIFFICULTIES, difficulty) ? difficulty : 'easy',
       maxPlayers,
       status: 'waiting',
       createdAt: Date.now(),
       members: new Map(),
       countdown: null,
       cleanupTimer: null,
+      reservationTimer: null,
       game: null,
-      chat: []
+      chat: [],
+      chatPresent: new Set()
     };
+    // the creator's seat is held while they are redirected to the lobby page, so nobody can fill or start it meanwhile
+    lobby.members.set(host.uid, { uid: host.uid, name: host.name, socketId: null, ready: false, connected: false });
+    lobby.reservationTimer = setTimeout(() => this.#safe(() => {
+      lobby.reservationTimer = null;
+      const member = lobby.members.get(host.uid);
+      if (!member || member.connected || lobby.status !== 'waiting') return;
+      if (lobby.members.size === 1) this.#deleteLobby(lobby);
+      else this.#removeMember(lobby, member);
+    }), this.timings.lobbyClearMs);
+
     this.lobbies.set(code, lobby);
     this.#scheduleCleanup(lobby);
     this.activity.add(host.name, `Lobby "${code}" erstellt`);
@@ -109,14 +145,14 @@ class LobbyManager {
     clearTimeout(lobby.cleanupTimer);
     lobby.cleanupTimer = setTimeout(() => {
       lobby.cleanupTimer = null;
-      const anyoneConnected = [...lobby.members.values()].some(m => m.connected);
-      if (!anyoneConnected && lobby.status !== 'playing') this.#deleteLobby(lobby);
+      if (!this.#anyoneConnected(lobby) && lobby.status !== 'playing') this.#deleteLobby(lobby);
     }, this.timings.lobbyClearMs);
   }
 
   #deleteLobby(lobby) {
     clearInterval(lobby.countdown);
     clearTimeout(lobby.cleanupTimer);
+    clearTimeout(lobby.reservationTimer);
     for (const ps of lobby.game?.players.values() ?? []) clearTimeout(ps.disconnectTimer);
     for (const member of lobby.members.values()) {
       const socket = this.#socketOf(member);
@@ -124,6 +160,26 @@ class LobbyManager {
     }
     this.io.socketsLeave([lobby.code, `chat:${lobby.code}`]);
     this.lobbies.delete(lobby.code);
+  }
+
+  dispose() {
+    for (const lobby of [...this.lobbies.values()]) this.#deleteLobby(lobby);
+  }
+
+  renameUser(uid, name) {
+    for (const socket of this.io.of('/').sockets.values()) {
+      if (socket.data.uid === uid) socket.data.name = name;
+    }
+    for (const lobby of this.lobbies.values()) {
+      const member = lobby.members.get(uid);
+      if (!member) continue;
+      member.name = name;
+      if (lobby.hostUid === uid) lobby.hostName = name;
+      const ps = lobby.game?.players.get(uid);
+      if (ps) ps.name = name;
+      this.#broadcastUsers(lobby);
+      if (ps && lobby.status === 'playing') this.#broadcastProgress(lobby);
+    }
   }
 
   closeLobby(code) {
@@ -140,10 +196,22 @@ class LobbyManager {
     const lobby = code ? this.lobbies.get(code) : null;
     if (!lobby) return socket.emit('lobbyError', ERR.notFound);
 
-    if (socket.data.lobbyCode && socket.data.lobbyCode !== code) this.leave(socket);
-
     const { uid, name } = socket.data;
     let member = lobby.members.get(uid);
+    if (!member) {
+      if (lobby.status === 'playing') return socket.emit('lobbyError', ERR.inProgress);
+      if (lobby.members.size >= lobby.maxPlayers) return socket.emit('lobbyError', ERR.full);
+      // switching away frees the current seat, unless the player stays in its running game
+      const current = this.lobbies.get(socket.data.lobbyCode);
+      const freed = current && !(current.status === 'playing' && current.game.players.has(uid));
+      let seats = 0;
+      for (const other of this.lobbies.values()) {
+        if (other.members.has(uid) && !(freed && other === current)) seats++;
+      }
+      if (seats >= MAX_SEATS) return socket.emit('lobbyError', ERR.tooManySeats);
+    }
+
+    if (socket.data.lobbyCode && socket.data.lobbyCode !== code) this.leave(socket);
 
     if (member) {
       if (member.socketId && member.socketId !== socket.id) {
@@ -160,20 +228,20 @@ class LobbyManager {
       member.connected = true;
       member.name = name;
     } else {
-      if (lobby.status === 'playing') return socket.emit('lobbyError', ERR.inProgress);
-      if (lobby.members.size >= lobby.maxPlayers) return socket.emit('lobbyError', ERR.full);
       member = { uid, name, socketId: socket.id, ready: false, connected: true };
       lobby.members.set(uid, member);
       if (lobby.status === 'starting') this.#cancelCountdown(lobby);
     }
 
     if (lobby.status === 'completed') this.#resetLobby(lobby);
+    this.#ensureHost(lobby);
 
     clearTimeout(lobby.cleanupTimer);
     lobby.cleanupTimer = null;
     socket.join(code);
     socket.data.lobbyCode = code;
     this.#broadcastUsers(lobby);
+    if (socket.data.pendingChat === code) this.chatJoin(socket, code);
 
     if (lobby.status === 'playing' && lobby.game.players.has(uid)) socket.emit('inGameStatus', true);
   }
@@ -187,6 +255,10 @@ class LobbyManager {
   leave(socket) {
     const code = socket.data.lobbyCode;
     socket.data.lobbyCode = null;
+    if (code && socket.data.chatCode === code) {
+      this.chatLeave(socket);
+      socket.leave(`chat:${code}`);
+    }
     const lobby = code ? this.lobbies.get(code) : null;
     if (!lobby) return;
     socket.leave(code);
@@ -200,25 +272,33 @@ class LobbyManager {
       member.connected = false;
       member.socketId = null;
       if (ps.status === 'alive') this.#startReconnectWindow(lobby, ps);
-      if (![...lobby.members.values()].some(m => m.connected)) this.#scheduleCleanup(lobby);
+      if (!this.#anyoneConnected(lobby)) this.#scheduleCleanup(lobby);
       return;
     }
 
+    this.#removeMember(lobby, member);
+  }
+
+  #removeMember(lobby, member) {
     lobby.members.delete(member.uid);
     if (lobby.status === 'starting') this.#cancelCountdown(lobby);
-    if (lobby.hostUid === member.uid) {
-      const next = lobby.members.values().next().value;
-      if (next) {
-        lobby.hostUid = next.uid;
-        lobby.hostName = next.name;
-      }
-    }
+    this.#ensureHost(lobby);
     if (lobby.members.size === 0) {
       this.#scheduleCleanup(lobby);
-    } else {
-      this.#broadcastUsers(lobby);
-      this.io.to(lobby.code).emit('userLeft', member.uid);
+      return;
     }
+    this.#broadcastUsers(lobby);
+    this.io.to(lobby.code).emit('userLeft', member.uid);
+    this.#maybeStartCountdown(lobby);
+  }
+
+  // the host must always be a current member (when there is one), it is what the lobby browser shows
+  #ensureHost(lobby) {
+    if (lobby.members.has(lobby.hostUid)) return;
+    const next = lobby.members.values().next().value;
+    if (!next) return;
+    lobby.hostUid = next.uid;
+    lobby.hostName = next.name;
   }
 
   toggleReady(socket) {
@@ -234,6 +314,10 @@ class LobbyManager {
       this.#cancelCountdown(lobby);
       return;
     }
+    this.#maybeStartCountdown(lobby);
+  }
+
+  #maybeStartCountdown(lobby) {
     const members = [...lobby.members.values()];
     if (lobby.status === 'waiting' && members.length >= MIN_PLAYERS && members.every(m => m.ready && m.connected)) {
       this.#startCountdown(lobby);
@@ -265,10 +349,15 @@ class LobbyManager {
   #startGame(lobby) {
     if (lobby.status !== 'starting' || !this.lobbies.has(lobby.code)) return;
     const { rows, cols, mines } = ms.DIFFICULTIES[lobby.difficulty];
-    const startX = randomInt(cols);
-    const startY = randomInt(rows);
-    const board = ms.createBoard(rows, cols, mines, startX, startY);
-    const initial = ms.floodReveal(board, startY * cols + startX);
+    let board;
+    let initial;
+    do {
+      // a start that already opens every safe cell could never be won, roll a new board
+      const startX = randomInt(cols);
+      const startY = randomInt(rows);
+      board = ms.createBoard(rows, cols, mines, startX, startY);
+      initial = ms.floodReveal(board, startY * cols + startX);
+    } while (initial.length === ms.safeCellCount(board));
     const now = Date.now();
 
     const players = new Map();
@@ -286,6 +375,7 @@ class LobbyManager {
         endTime: null,
         pausedMs: 0,
         penaltyMs: 0,
+        pauses: 0,
         disconnectTimer: null
       });
     }
@@ -400,7 +490,8 @@ class LobbyManager {
     if (!lobby || lobby.status !== 'playing') return;
     const { game } = lobby;
     const viewer = game.players.get(socket.data.uid);
-    if (viewer && viewer.status === 'alive') return;
+    // 'disconnected' players can still come back, so only dead or finished players may watch others
+    if (viewer && viewer.status !== 'dead' && viewer.status !== 'finished') return;
     const target = typeof targetId === 'string' ? game.players.get(targetId) : null;
     if (!target || target.status !== 'alive') return;
 
@@ -417,14 +508,21 @@ class LobbyManager {
 
   #startReconnectWindow(lobby, ps) {
     const { game } = lobby;
-    clearTimeout(ps.disconnectTimer);
+    // dropping again without finishing the reconnect keeps the original deadline, the pause can't be extended forever
+    if (ps.disconnectTimer) return;
+    const forfeitLater = () => this.#safe(() => this.#forfeit(lobby, ps));
+    if (++ps.pauses > MAX_PAUSES) {
+      // out of pauses: the others keep playing while the dropped player's clock runs
+      ps.disconnectTimer = setTimeout(forfeitLater, this.timings.reconnectTimeoutMs);
+      return;
+    }
     game.waitingFor.add(ps.uid);
     if (game.pausedAt === null) game.pausedAt = Date.now();
     this.io.to(lobby.code).emit('gamePaused', {
       playerId: ps.uid,
       timeout: Math.round(this.timings.reconnectTimeoutMs / 1000)
     });
-    ps.disconnectTimer = setTimeout(() => this.#safe(() => this.#forfeit(lobby, ps)), this.timings.reconnectTimeoutMs);
+    ps.disconnectTimer = setTimeout(forfeitLater, this.timings.reconnectTimeoutMs);
   }
 
   #resume(lobby) {
@@ -444,10 +542,13 @@ class LobbyManager {
     const { game } = lobby;
     game.waitingFor.delete(ps.uid);
     if (ps.status === 'alive') ps.status = 'disconnected';
-    if (game.waitingFor.size === 0) this.#resume(lobby);
+    const resumed = game.waitingFor.size === 0 && this.#resume(lobby);
     this.io.to(lobby.code).emit('playerDisconnected', { playerId: ps.uid, timeout: true });
     this.io.to(lobby.code).emit('playerStatusChanged', { playerId: ps.uid, status: 'disconnected' });
     this.#checkCompletion(lobby);
+    if (resumed && lobby.status === 'playing') {
+      this.io.to(lobby.code).emit('gameResumed', { reconnectedPlayerId: null, penalty: 0 });
+    }
   }
 
   requestReconnect(socket) {
@@ -460,9 +561,10 @@ class LobbyManager {
 
     clearTimeout(ps.disconnectTimer);
     ps.disconnectTimer = null;
-    game.waitingFor.delete(ps.uid);
+    const wasAwaited = game.waitingFor.delete(ps.uid);
     if (ps.status === 'disconnected') {
       ps.status = 'alive';
+      game.spectators.delete(socket.id);
       this.io.to(lobby.code).emit('playerStatusChanged', { playerId: ps.uid, status: 'alive' });
     }
     const alive = ps.status === 'alive';
@@ -481,6 +583,7 @@ class LobbyManager {
       isPaused: game.pausedAt !== null,
       isDead: !alive
     });
+    if (!resumed && wasAwaited) this.io.to(lobby.code).emit('playerReconnected', { playerId: ps.uid });
     if (resumed) {
       this.io.to(lobby.code).emit('gameResumed', {
         reconnectedPlayerId: ps.uid,
@@ -561,6 +664,7 @@ class LobbyManager {
     for (const member of [...lobby.members.values()]) {
       if (!member.connected) lobby.members.delete(member.uid);
     }
+    this.#ensureHost(lobby);
     if (lobby.members.size === 0) this.#scheduleCleanup(lobby);
     else this.#broadcastUsers(lobby);
   }
@@ -569,23 +673,29 @@ class LobbyManager {
     const code = normalizeLobbyCode(rawCode);
     const lobby = code ? this.lobbies.get(code) : null;
     if (!lobby) return;
+    // the chat of a lobby is for its members; the page may ask before its lobby join went through
+    if (socket.data.lobbyCode !== code) {
+      socket.data.pendingChat = code;
+      return;
+    }
+    socket.data.pendingChat = null;
     if (socket.data.chatCode && socket.data.chatCode !== code) socket.leave(`chat:${socket.data.chatCode}`);
-    const rejoin = socket.data.chatCode === code;
     socket.data.chatCode = code;
     socket.join(`chat:${code}`);
     for (const message of lobby.chat) socket.emit('lobbyChatMessage', message);
     socket.emit('lobbyChatJoined');
-    if (!rejoin) this.#systemMessage(socket, code, `${socket.data.name} joined.`);
+    if (lobby.chatPresent.has(socket.data.uid)) return;
+    lobby.chatPresent.add(socket.data.uid);
+    this.#systemMessage(socket, code, `${socket.data.name} joined.`);
   }
 
   chatMessage(socket, payload = {}) {
     const code = socket.data.chatCode;
     const lobby = code ? this.lobbies.get(code) : null;
-    if (!lobby) return;
+    if (!lobby || socket.data.lobbyCode !== code) return;
     const message = cleanText(payload.message, CHAT_MAX_LENGTH);
     if (!message) return;
-    socket.data.chatLimiter ??= new RateLimiter(5, 5000);
-    if (!socket.data.chatLimiter.allow()) return socket.emit('lobbyChatError', 'You are sending messages too fast');
+    if (!this.#chatLimiter.allow(socket.data.uid)) return socket.emit('lobbyChatError', 'You are sending messages too fast');
 
     const entry = { username: socket.data.name, uid: socket.data.uid, message, timestamp: Date.now() };
     lobby.chat.push(entry);
@@ -601,7 +711,13 @@ class LobbyManager {
     const code = socket.data.chatCode;
     if (!code) return;
     socket.data.chatCode = null;
-    if (this.lobbies.has(code)) this.#systemMessage(socket, code, `${socket.data.name} left.`);
+    const lobby = this.lobbies.get(code);
+    if (!lobby) return;
+    // a second tab took over this player's seat, they are still here
+    const member = lobby.members.get(socket.data.uid);
+    if (member?.connected && member.socketId !== socket.id) return;
+    lobby.chatPresent.delete(socket.data.uid);
+    this.#systemMessage(socket, code, `${socket.data.name} left.`);
   }
 
   summaries() {
@@ -625,13 +741,18 @@ class LobbyManager {
 }
 
 function registerLobbyHandlers(socket, manager) {
-  const lobbyLimiter = new RateLimiter(3, 10_000);
+  // per socket for normal use, per account so reconnecting doesn't reset the budget
+  const socketLobbyLimiter = new RateLimiter(3, 10_000);
+  const lobbyLimiter = { allow: () => manager.lobbyLimiter.allow(socket.data.uid) && socketLobbyLimiter.allow() };
+  const chatJoinLimiter = new RateLimiter(3, 10_000);
   const moveLimiter = new RateLimiter(40, 1000);
+  // the lobby page only joins once per connect, so a throttled join must tell it to try again instead of going quiet
+  const retryLater = () => socket.emit('lobbyRetry', RETRY_MS);
 
-  const on = (event, handler, limiter = null) => {
+  const on = (event, handler, limiter = null, onLimited = null) => {
     socket.on(event, (...args) => {
       socket.data.lastActivity = Date.now();
-      if (limiter && !limiter.allow()) return;
+      if (limiter && !limiter.allow()) return onLimited?.();
       try {
         handler(...args);
       } catch (err) {
@@ -644,15 +765,15 @@ function registerLobbyHandlers(socket, manager) {
     const result = manager.createLobby(socket.data, payload ?? {});
     if (result.error) socket.emit('lobbyError', result.error);
     else socket.emit('lobbyCreated', result.code);
-  }, lobbyLimiter);
-  on('joinLobby', payload => manager.joinLobby(socket, payload?.code), lobbyLimiter);
+  }, lobbyLimiter, () => socket.emit('lobbyError', ERR.slowDown));
+  on('joinLobby', payload => manager.joinLobby(socket, payload?.code), lobbyLimiter, retryLater);
   on('readyUp', () => manager.toggleReady(socket), moveLimiter);
-  on('requestReconnectGameData', () => manager.requestReconnect(socket), lobbyLimiter);
+  on('requestReconnectGameData', () => manager.requestReconnect(socket), lobbyLimiter, retryLater);
   on('revealCell', payload => manager.revealCell(socket, payload ?? {}), moveLimiter);
   on('chordReveal', payload => manager.chordReveal(socket, payload ?? {}), moveLimiter);
   on('placeFlag', payload => manager.placeFlag(socket, payload ?? {}), moveLimiter);
   on('spectatePlayer', targetId => manager.spectate(socket, targetId), moveLimiter);
-  on('lobbyChatJoin', payload => manager.chatJoin(socket, payload?.lobby), lobbyLimiter);
+  on('lobbyChatJoin', payload => manager.chatJoin(socket, payload?.lobby), chatJoinLimiter);
   on('lobbyChatMessage', payload => manager.chatMessage(socket, payload ?? {}));
 
   socket.on('disconnect', () => {

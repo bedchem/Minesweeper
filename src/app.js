@@ -12,6 +12,8 @@ const { LobbyManager, registerLobbyHandlers } = require('./lobbies');
 const { createApiRouter } = require('./routes/api');
 const { createAdminRouter } = require('./routes/admin');
 
+const MAX_SOCKETS_PER_USER = 8;
+
 function contentSecurityPolicy(config) {
   const directives = {
     defaultSrc: ["'self'"],
@@ -104,6 +106,9 @@ function createApp({ config, userStore, firebaseAuth, logger = console }) {
     if (!decoded) return next(new Error('Authentication failed'));
     const user = userStore.get(decoded.uid);
     if (!user) return next(new Error('User data not found'));
+    let open = 0;
+    for (const other of io.of('/').sockets.values()) if (other.data.uid === user.uid) open++;
+    if (open >= MAX_SOCKETS_PER_USER) return next(new Error('Too many connections'));
     const now = Date.now();
     Object.assign(socket.data, {
       uid: user.uid,
@@ -122,6 +127,7 @@ function createApp({ config, userStore, firebaseAuth, logger = console }) {
   });
 
   async function close() {
+    lobbyManager.dispose();
     await new Promise(resolve => io.close(() => resolve()));
     if (server.listening) await new Promise(resolve => server.close(() => resolve()));
     await userStore.flush();

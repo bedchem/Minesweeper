@@ -36,7 +36,7 @@ const { server, close } = createApp({
   config,
   userStore,
   firebaseAuth: {
-    verifyIdToken: token => adminAuth.verifyIdToken(token),
+    verifyIdToken: (token, checkRevoked = false) => adminAuth.verifyIdToken(token, checkRevoked),
     createUser: props => adminAuth.createUser(props),
     updateUser: (uid, props) => adminAuth.updateUser(uid, props),
     deleteUser: uid => adminAuth.deleteUser(uid)

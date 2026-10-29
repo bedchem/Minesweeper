@@ -16,7 +16,9 @@ function filterByTimeRange(history, days, now = Date.now()) {
 }
 
 function minTime(games) {
-  return games.length > 0 ? Math.min(...games.map(g => g.time)) : null;
+  let best = null;
+  for (const game of games) if (best === null || game.time < best) best = game.time;
+  return best;
 }
 
 function summarize(games) {

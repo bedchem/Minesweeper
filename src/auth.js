@@ -7,14 +7,17 @@ function fail(res, status, message, extra = {}) {
 }
 
 function createAuth({ firebaseAuth, userStore, adminUids = [] }) {
-  async function verifyToken(token) {
+  async function verifyToken(token, { checkRevoked = false, allowDeleted = false } = {}) {
     if (typeof token !== 'string' || token.length === 0 || token.length > 4096) return null;
+    let decoded;
     try {
-      const decoded = await firebaseAuth.verifyIdToken(token);
-      return isValidUid(decoded?.uid) ? decoded : null;
-    } catch {
-      return null;
+      decoded = await firebaseAuth.verifyIdToken(token, checkRevoked);
+    } catch (err) {
+      if (!allowDeleted || err?.code !== 'auth/user-not-found') return null;
+      // the account is already gone in Firebase, the signature is still checked
+      decoded = await firebaseAuth.verifyIdToken(token).catch(() => null);
     }
+    return isValidUid(decoded?.uid) ? decoded : null;
   }
 
   function bearerToken(req) {
@@ -27,6 +30,16 @@ function createAuth({ firebaseAuth, userStore, adminUids = [] }) {
     if (!decoded) return fail(res, 401, 'Unauthorized');
     req.auth = decoded;
     next();
+  }
+
+  // also asks Firebase whether the token was revoked or the account deleted
+  function requireFreshAuth({ allowDeleted = false } = {}) {
+    return async (req, res, next) => {
+      const decoded = await verifyToken(bearerToken(req), { checkRevoked: true, allowDeleted });
+      if (!decoded) return fail(res, 401, 'Unauthorized');
+      req.auth = decoded;
+      next();
+    };
   }
 
   function loadUser(req, res, next) {
@@ -43,7 +56,7 @@ function createAuth({ firebaseAuth, userStore, adminUids = [] }) {
     next();
   }
 
-  return { verifyToken, requireAuth, loadUser, requireAdmin, isAdmin };
+  return { verifyToken, requireAuth, requireFreshAuth, loadUser, requireAdmin, isAdmin };
 }
 
 async function verifyRecaptcha(token, secret, remoteIp) {

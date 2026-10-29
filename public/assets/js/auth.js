@@ -30,16 +30,19 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof grecaptcha !== 'undefined') grecaptcha.reset();
   }
 
-  async function verifyCaptcha(action) {
+  function captchaToken() {
     if (typeof grecaptcha === 'undefined') {
       showCustomAlert('Captcha konnte nicht geladen werden', 'error');
-      return false;
+      return null;
     }
     const token = grecaptcha.getResponse();
-    if (!token) {
-      showCustomAlert('Bitte löse das Captcha', 'error');
-      return false;
-    }
+    if (!token) showCustomAlert('Bitte löse das Captcha', 'error');
+    return token || null;
+  }
+
+  async function verifyCaptcha(action) {
+    const token = captchaToken();
+    if (!token) return false;
     const { ok, data } = await apiPost('/recaptcha', { token, action });
     if (!ok || !data.success) {
       resetCaptcha();
@@ -160,7 +163,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const check = await apiPost('/api/checkUsername', { username });
     if (check.data.exists) return showCustomAlert('Benutzername ist bereits vergeben', 'error');
-    if (!(await verifyCaptcha('register'))) return;
+    // the token is single use, the server checks it when the account is created
+    const captcha = captchaToken();
+    if (!captcha) return;
 
     let user;
     try {
@@ -175,11 +180,12 @@ document.addEventListener('DOMContentLoaded', function () {
       return showCustomAlert(errorMessage, 'error');
     }
 
-    const created = await apiPost('/api/createUser', { username }, await user.getIdToken());
+    const created = await apiPost('/api/createUser', { username, captchaToken: captcha }, await user.getIdToken());
     if (!created.ok) {
       // don't leave an account without data behind
       await user.delete().catch(console.error);
       resetCaptcha();
+      if (created.data.code === 'captcha') return showCustomAlert('Captcha ungültig, bitte erneut versuchen', 'error');
       return showCustomAlert(created.status === 409 ? 'Benutzername ist bereits vergeben' : 'Registrierung fehlgeschlagen!', 'error');
     }
     await user.updateProfile({ displayName: created.data.username });
