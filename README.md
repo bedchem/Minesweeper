@@ -1,5 +1,5 @@
 #  Multiplayer Minesweeper <3
-    by Ryhox and Nexor 
+    by Pokyh
 
 A sleek, real-time **Multiplayer Minesweeper** game built for the web — featuring **PvP lobbies**, **persistent stats**, and a competitive edge. Challenge your friends, race against time, and climb the leaderboard!
 

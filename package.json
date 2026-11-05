@@ -4,7 +4,7 @@
   "private": true,
   "description": "Real-time multiplayer Minesweeper with lobbies, stats and leaderboards",
   "main": "server.js",
-  "author": "Ryhox & Nexor",
+  "author": "Pokyh",
   "license": "ISC",
   "engines": {
     "node": ">=22"
