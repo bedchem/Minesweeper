@@ -10,7 +10,8 @@ window.addEventListener("load", function(){
       message: "Diese Website verwendet Cookies.",
       dismiss: "Ablehnen",
       allow: "Akzeptieren",
-      link: "Mehr erfahren"
+      link: "Mehr erfahren",
+      href: "/privacy"
     }
   })
 });

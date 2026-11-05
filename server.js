@@ -12,21 +12,27 @@ const { createApp } = require('./src/app');
 const config = loadConfig();
 
 function firebaseCredential() {
+  const { projectId, clientEmail, privateKey } = config.serviceAccount;
+  if (clientEmail && privateKey) return cert({ projectId, clientEmail, privateKey });
   if (fs.existsSync(config.serviceAccountPath)) {
     return cert(JSON.parse(fs.readFileSync(config.serviceAccountPath, 'utf8')));
   }
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) return applicationDefault();
   throw new Error(
-    `Firebase service account not found at ${config.serviceAccountPath}. ` +
-    'Set FIREBASE_SERVICE_ACCOUNT or GOOGLE_APPLICATION_CREDENTIALS.'
+    'Firebase admin credentials missing. Set FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY in .env ' +
+    `(or put a service account file at ${config.serviceAccountPath} / set GOOGLE_APPLICATION_CREDENTIALS).`
   );
 }
 
 initializeApp({ credential: firebaseCredential() });
 const adminAuth = getAuth();
 
-if (!config.recaptchaSecrets.login || !config.recaptchaSecrets.register) {
-  console.warn('reCAPTCHA secrets missing (RECAPTCHA_SECRET_LOGIN / RECAPTCHA_SECRET_REGISTER): captcha checks are skipped.');
+if (!config.firebaseWeb.apiKey && !fs.existsSync(`${config.publicDir}/assets/js/firebase-auth.js`)) {
+  console.warn('Firebase web config missing: set FIREBASE_API_KEY etc. in .env, otherwise login will not work in the browser.');
+}
+
+if (!config.recaptcha.siteKey || !config.recaptcha.secret) {
+  console.warn('reCAPTCHA needs both RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY: captcha checks are skipped.');
 }
 
 const userStore = new UserStore(config.userDataDir).load();

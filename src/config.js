@@ -25,14 +25,31 @@ function loadConfig(env = process.env) {
     userDataDir: path.resolve(ROOT_DIR, env.USER_DATA_DIR || 'userDATA'),
     profilePicsDir: path.resolve(ROOT_DIR, env.PROFILE_PICS_DIR || 'profile_pics'),
     serviceAccountPath: path.resolve(ROOT_DIR, env.FIREBASE_SERVICE_ACCOUNT || 'firebaseServiceAccount.json'),
+    serviceAccount: {
+      projectId: env.FIREBASE_PROJECT_ID || '',
+      clientEmail: env.FIREBASE_CLIENT_EMAIL || '',
+      // accept literal "\n" in case the key was pasted without quotes
+      privateKey: (env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n')
+    },
     port: Number(env.PORT) || 3000,
     host: env.HOST || '0.0.0.0',
     trustProxy: trustProxy(env.TRUST_PROXY),
     allowedOrigins: list(env.ALLOWED_ORIGINS),
     adminUids: list(env.ADMIN_UIDS),
-    recaptchaSecrets: {
-      login: env.RECAPTCHA_SECRET_LOGIN || '',
-      register: env.RECAPTCHA_SECRET_REGISTER || ''
+    // public web config, served as /assets/js/firebase-auth.js
+    firebaseWeb: {
+      apiKey: env.FIREBASE_API_KEY || '',
+      authDomain: env.FIREBASE_AUTH_DOMAIN || '',
+      projectId: env.FIREBASE_PROJECT_ID || '',
+      storageBucket: env.FIREBASE_STORAGE_BUCKET || '',
+      messagingSenderId: env.FIREBASE_MESSAGING_SENDER_ID || '',
+      appId: env.FIREBASE_APP_ID || '',
+      measurementId: env.FIREBASE_MEASUREMENT_ID || ''
+    },
+    // reCAPTCHA v2 checkbox, one key for login and register; captcha is off unless both are set
+    recaptcha: {
+      siteKey: env.RECAPTCHA_SITE_KEY || '',
+      secret: env.RECAPTCHA_SECRET_KEY || ''
     },
     csp: {
       reportOnly: bool(env.CSP_REPORT_ONLY),

@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /admin
+Disallow: /profile
+Disallow: /lobby/
+Disallow: /api/
+
+Sitemap: https://minesweeper.plattnericus.dev/sitemap.xml

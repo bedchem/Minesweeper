@@ -37,7 +37,8 @@ function publicUser(user, isAdmin) {
     role: user.role ?? 'user',
     isAdmin,
     createdAt: user.createdAt ?? null,
-    nameHistory: user.nameHistory ?? []
+    nameHistory: user.nameHistory ?? [],
+    avatarVersion: user.avatarVersion ?? 0
   };
 }
 
@@ -75,6 +76,8 @@ function createApiRouter(ctx) {
   const accountLimit = limiter(30, 15 * 60_000, uidKey);
   const gameLimit = limiter(120, 15 * 60_000, uidKey);
 
+  const avatarVersion = uid => userStore.get(uid)?.avatarVersion ?? 0;
+
   const leaderboardCache = new Map();
   function leaderboard(type, days) {
     const key = `${type}:${days ?? 'all'}`;
@@ -89,13 +92,21 @@ function createApiRouter(ctx) {
 
   router.use(['/api', '/recaptcha'], publicLimit);
 
+  const captchaSecret = config.recaptcha.siteKey && config.recaptcha.secret ? config.recaptcha.secret : null;
+
+  // the site key is public; without one the pages skip the captcha (e.g. local dev without keys)
+  router.get('/api/captchaConfig', (req, res) => {
+    res.json({ siteKey: captchaSecret ? config.recaptcha.siteKey : null });
+  });
+
   router.get('/api/lobbies', (req, res) => {
     res.json(lobbyManager.summaries().filter(l => l.status === 'waiting' || l.status === 'completed'));
   });
 
   router.get('/api/getLeaderboard', (req, res) => {
     const type = req.query.type === 'singleplayer' ? 'singleplayer' : 'multiplayer';
-    res.json(leaderboard(type, parseTimeRange(req.query.timeRange)).slice(0, 50));
+    const top = leaderboard(type, parseTimeRange(req.query.timeRange)).slice(0, 50);
+    res.json(top.map(entry => ({ ...entry, avatarVersion: avatarVersion(entry.uid) })));
   });
 
   router.get('/api/getGlobalStats', (req, res) => {
@@ -113,7 +124,7 @@ function createApiRouter(ctx) {
     };
     stats.multiplayer.leaderboardPosition = rank('multiplayer');
     stats.singleplayer.leaderboardPosition = rank('singleplayer');
-    res.json({ username: user.username, uid: user.uid, ...stats });
+    res.json({ username: user.username, uid: user.uid, avatarVersion: avatarVersion(user.uid), ...stats });
   });
 
   router.get('/api/getAllUsernames', (req, res) => {
@@ -127,12 +138,13 @@ function createApiRouter(ctx) {
   });
 
   router.post('/recaptcha', async (req, res) => {
-    const { token, action } = req.body ?? {};
-    const secret = config.recaptchaSecrets[action === 'register' ? 'register' : 'login'];
-    if (!secret) return res.json({ success: true, skipped: true });
-    if (typeof token !== 'string' || !token) return res.status(400).json({ success: false, message: 'Missing token' });
+    const { token } = req.body ?? {};
+    if (!captchaSecret) return res.json({ success: true, skipped: true });
+    if (typeof token !== 'string' || !token || token.length > 4096) {
+      return res.status(400).json({ success: false, message: 'Missing token' });
+    }
     try {
-      const result = await verifyRecaptcha(token, secret, req.ip);
+      const result = await verifyRecaptcha(token, captchaSecret, req.ip);
       if (result.success) return res.json({ success: true });
       res.status(400).json({ success: false, message: 'Captcha validation failed', error: result['error-codes'] });
     } catch (err) {
@@ -146,7 +158,8 @@ function createApiRouter(ctx) {
     const file = isValidUid(uid)
       ? ['png', 'jpg'].map(ext => path.join(config.profilePicsDir, `${uid}.${ext}`)).find(f => fs.existsSync(f))
       : null;
-    res.set('Cache-Control', 'no-cache');
+    // ?v= changes with every upload, so a versioned link can be cached for good; plain links are revalidated
+    res.set('Cache-Control', req.query.v !== undefined ? 'public, max-age=31536000, immutable' : 'no-cache');
     res.sendFile(file ?? path.join(config.publicDir, 'assets/images/icon.png'), err => err && next(err));
   });
 
@@ -167,10 +180,10 @@ function createApiRouter(ctx) {
       username = uniqueUsername(userStore, requested || email?.split('@')[0]);
     }
 
-    if (config.recaptchaSecrets.register && firebase?.sign_in_provider === 'password') {
+    if (captchaSecret && firebase?.sign_in_provider === 'password') {
       const token = req.body?.captchaToken;
       if (typeof token !== 'string' || !token || token.length > 4096) return fail(res, 400, 'Captcha required', { code: 'captcha' });
-      const result = await verifyRecaptcha(token, config.recaptchaSecrets.register, req.ip).catch(err => {
+      const result = await verifyRecaptcha(token, captchaSecret, req.ip).catch(err => {
         logger.error('reCAPTCHA verification error:', err);
         return null;
       });
@@ -256,12 +269,23 @@ function createApiRouter(ctx) {
 
     const { uid } = req.user;
     await fsp.mkdir(config.profilePicsDir, { recursive: true });
-    await removeAvatar(config.profilePicsDir, uid);
     const file = path.join(config.profilePicsDir, `${uid}.${ext}`);
     const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-    await fsp.writeFile(tmp, buffer);
-    await fsp.rename(tmp, file);
-    res.json({ url: `/avatar/${uid}` });
+    try {
+      await fsp.writeFile(tmp, buffer);
+      await fsp.rename(tmp, file);
+    } catch (err) {
+      await fsp.rm(tmp, { force: true });
+      throw err;
+    }
+    // the old picture of the other type goes only now, so there is never a moment without one
+    await fsp.rm(path.join(config.profilePicsDir, `${uid}.${ext === 'png' ? 'jpg' : 'png'}`), { force: true });
+
+    const { avatarVersion: v } = await userStore.update(uid, u => {
+      u.avatarVersion = Math.max(Date.now(), (u.avatarVersion ?? 0) + 1);
+    });
+    io.emit('avatarUpdated', { uid, v });
+    res.json({ url: `/avatar/${uid}?v=${v}`, avatarVersion: v });
   });
 
   router.post('/api/saveSoloGame', requireAuth, gameLimit, loadUser, async (req, res) => {

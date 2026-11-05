@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy</title>
+  <meta name="description" content="Privacy policy of Minesweeper Multiplayer: which data we process, why, for how long and what your rights are.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://minesweeper.plattnericus.dev/privacy">
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha384-nRgPTkuX86pH8yjPJUAFuASXQSSl2/bBUiNV47vSYpKFxHJhbcrGnmlYpYJMeD7a" crossorigin="anonymous">
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-app-compat.js" integrity="sha384-yv+ZUv/KyryBDNR7YidkLtr/oFDx0uwomSfUCO6neJglg17CDzXceDp8+BdqbvkD" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.1.0/firebase-auth-compat.js" integrity="sha384-DCSLUn2bWnL7yjZ+41b+hX4KdGS4F4auH9Q8zTeRYxSeGJPCc9QgCI4/buENd5Fp" crossorigin="anonymous"></script>
+  <script src="/assets/js/firebase-auth.js"></script>
+  <link rel="icon" type="image/png" href="/assets/images/minesweeperlogo.png">
+  <script src="/assets/js/cookies.js"></script>
+  <script src="/assets/js/alert.js"></script>
+<script src="/assets/js/avatars.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.js" integrity="sha384-xLPjH6nqG4p/2mu1KJ1t+4KqcvkyXVwBucQtyGK65lDNfKzECxGY/QEYWR+Wompr" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.css" integrity="sha384-nA7usz4cMKo7RylsCZnpe0V9qx5X7sa011o0OrDzrKUE7Ero1gB48Fjaw6SFxVZe" crossorigin="anonymous">
+  <style>
+    .policy {
+      background: #2d2d2d;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 820px;
+      margin: 0 0 2rem;
+      box-sizing: border-box;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+    }
+    .policy h2 {
+      color: lightskyblue;
+      font-size: 1.15rem;
+      margin: 1.8rem 0 0.6rem;
+    }
+    .policy h2:first-of-type {
+      margin-top: 0.5rem;
+    }
+    .policy p,
+    .policy li {
+      font-size: 0.95rem;
+      color: #e0e0e0;
+    }
+    .policy ul {
+      padding-left: 1.2rem;
+      margin: 0.4rem 0 0.8rem;
+    }
+    .policy li {
+      margin-bottom: 0.35rem;
+    }
+    .policy a {
+      color: lightsalmon;
+    }
+    .policy .updated {
+      color: #8E8E93;
+      font-size: 0.85rem;
+      text-align: center;
+      margin: 0 0 1rem;
+    }
+  </style>
+</head>
+<body>
+<header>
+    <a href="/" style="text-decoration: none;">
+    <div class="header-title">RYHOX.DEV</div>
+    </a>    <div class="header-subtitle">MINESWEEPER selection</div>
+<div class="user-menu-wrapper" id="userMenuWrapper">
+    <div class="user-icon" id="userIcon" style="display:none;">
+        <img id="headerAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:0px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+        <i id="headerAvatarFallback" style="font-size:36px;"></i>
+    </div>
+    <div class="user-dropdown" id="userDropdown">
+        <div class="dropdown-header">
+            <p class="dropdown-signed">Signed in as</p>
+            <div class="dropdown-user">
+                <div class="dropdown-avatar">
+                    <img id="dropdownAvatar" src="/assets/images/icon.png" alt="avatar" style="margin-top:50px;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+                </div>
+                <p class="dropdown-email" id="dropdownEmail" style="margin-top:50px;"></p>
+            </div>
+        </div>
+        <div class="dropdown-links">
+            <a href="/profile" class="dropdown-link profile">
+                <span>Profile</span>
+            </a>
+            <a href="#" class="dropdown-link stats" id="dropdownStats">
+                <span>Stats</span>
+            </a>
+            <a href="#" class="dropdown-link logout" id="dropdownLogout">
+                <span>Logout</span>
+            </a>
+        </div>
+    </div>
+    <a href="/login" id="signInBtn" class="sign-in-btn" style="display:none;">Sign In / Sign Up</a>
+</div>
+</header>
+<div class="container">
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: 5 November 2026</p>
+
+  <main class="policy">
+    <h2>1. Who we are</h2>
+    <p>
+      Minesweeper Multiplayer is a free, non-commercial hobby project run by its two developers, Ryhox and Nexor
+      ("we", "us"). We are responsible for the processing of your personal data on this website within the meaning
+      of the EU General Data Protection Regulation (GDPR) and the Italian Personal Data Protection Code
+      (Legislative Decree 196/2003).
+    </p>
+    <p>
+      For anything about your data, including requests to exercise your rights, write to
+      <a href="mailto:contact@pokyh.com">contact@pokyh.com</a>.
+    </p>
+
+    <h2>2. What we process and why</h2>
+    <p><strong>Your account.</strong> When you register, we store your email address, a username you choose and a
+      unique account ID. Sign-in is handled by Firebase Authentication (Google), which also stores your password in
+      protected (hashed) form; we never see it. If you sign in with Google, GitHub, Discord or X, that provider sends us
+      your account ID and, depending on the provider, your email address and display name.
+      Legal basis: providing the service you signed up for (Art. 6(1)(b) GDPR).</p>
+    <p><strong>Your profile and game data.</strong> On our server we store your username, email address, the date your
+      account was created, your previous usernames with the date of each change, your role (e.g. admin), the profile
+      picture you upload, and the results of your games (mode, difficulty, number of players, date, won or lost, time
+      and progress). We use this to show your profile, statistics and leaderboard rank.
+      Legal basis: Art. 6(1)(b) GDPR.</p>
+    <p><strong>What is public.</strong> Your username, profile picture, statistics and leaderboard rank can be seen
+      by anyone, including people who are not signed in. In a lobby, other players see your username, picture and
+      ready status. Your email address is never shown to other players.</p>
+    <p><strong>Lobby chat.</strong> Messages you send in a lobby chat are shown to the players in that lobby together
+      with your username and picture. They are kept only in the server's memory (the last 50 messages per lobby) and
+      are gone when the lobby closes; we do not save them to disk. If someone posts a link to an image, your browser
+      loads it directly from that website, which then sees your IP address.
+      Legal basis: Art. 6(1)(b) GDPR.</p>
+    <p><strong>Technical data.</strong> To run the site, connect you to games and protect it against abuse (for
+      example limiting how many requests one IP address can make), our server processes your IP address and
+      connection details. Rate-limit counters are kept in memory for at most 15 minutes. Admins can see the list of
+      currently connected players (username, lobby, connection time) and a short log of recent actions such as
+      "lobby created"; both exist only in memory and are lost when the server restarts.
+      Legal basis: our legitimate interest in a secure, working service (Art. 6(1)(f) GDPR).</p>
+    <p><strong>Spam protection.</strong> The login and registration pages use Google reCAPTCHA, which processes your
+      IP address and information about your browser and your interaction with the page to tell people and bots
+      apart. Legal basis: Art. 6(1)(f) GDPR (protecting accounts from automated abuse).</p>
+
+    <h2>3. Cookies and browser storage</h2>
+    <ul>
+      <li><strong>Login session:</strong> Firebase keeps you signed in by storing a session token in your browser's
+        storage. This is strictly necessary for the login to work.</li>
+      <li><strong>Profile picture cache:</strong> we store your own account ID and picture version in your browser's
+        local storage so your picture shows up immediately.</li>
+      <li><strong>Cookie banner:</strong> the cookie <code>cookieconsent_status</code> remembers your choice in the
+        banner for one year.</li>
+    </ul>
+    <p>We do not use analytics, tracking or advertising cookies.</p>
+
+    <h2>4. Who receives your data</h2>
+    <ul>
+      <li><strong>Google (Firebase Authentication, reCAPTCHA, gstatic.com):</strong> sign-in, password reset emails,
+        spam protection and the Firebase script files. See
+        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's privacy policy</a>.</li>
+      <li><strong>Sign-in providers</strong> (Google, GitHub, Discord, X): only if you choose to sign in with them.</li>
+      <li><strong>Content delivery networks:</strong> icons and some scripts are loaded from cdnjs.cloudflare.com
+        (Cloudflare) and cdn.jsdelivr.net (jsDelivr). When your browser loads them, these services receive your IP
+        address and basic browser information.</li>
+    </ul>
+    <p>
+      Your profile, statistics and pictures are stored on our own server. We do not sell your data or share it with
+      anyone else. Some of the services above may process data outside the European Union, in particular in the USA.
+      Such transfers are covered by the EU-U.S. Data Privacy Framework and/or the EU Standard Contractual Clauses
+      (Art. 45 and 46 GDPR).
+    </p>
+
+    <h2>5. How long we keep your data</h2>
+    <ul>
+      <li>Account, profile, statistics and profile picture: until you delete your account. You can do that yourself
+        at any time on the <a href="/profile">profile page</a>; your login, profile data, game history and picture are
+        then deleted immediately.</li>
+      <li>Lobby chat: until the lobby closes.</li>
+      <li>Connection data and rate-limit counters: at most 15 minutes, in memory only.</li>
+    </ul>
+
+    <h2>6. Your rights</h2>
+    <p>Under the GDPR you have the right to:</p>
+    <ul>
+      <li>get a copy of the data we hold about you (Art. 15);</li>
+      <li>have wrong data corrected (Art. 16); you can change your username yourself on the profile page;</li>
+      <li>have your data deleted (Art. 17);</li>
+      <li>restrict the processing (Art. 18);</li>
+      <li>receive your data in a machine-readable format (Art. 20);</li>
+      <li>object to processing based on our legitimate interest (Art. 21).</li>
+    </ul>
+    <p>
+      Just write to <a href="mailto:contact@pokyh.com">contact@pokyh.com</a>. You also have the right to lodge a
+      complaint with a supervisory authority, in Italy the Garante per la protezione dei dati personali
+      (<a href="https://www.garanteprivacy.it" target="_blank" rel="noopener">www.garanteprivacy.it</a>).
+    </p>
+
+    <h2>7. Children</h2>
+    <p>
+      In Italy you can create an account on your own from the age of 14 (Art. 2-quinquies of the Italian Personal
+      Data Protection Code). If you are younger, a parent or guardian has to agree first.
+    </p>
+
+    <h2>8. Automated decisions</h2>
+    <p>We do not make automated decisions about you and do not create profiles of you within the meaning of Art. 22 GDPR.</p>
+
+    <h2>9. Changes</h2>
+    <p>
+      If the website changes the way it uses data, we will update this page. The date at the top shows when it was
+      last changed.
+    </p>
+  </main>
+</div>
+<footer>
+    <a href="/privacy" id="privacy-link">Privacy Policy</a>
+    <p>Copyright 2025 ryhox.dev</p>
+    <div class="contact-links">
+        <a href="mailto:contact@pokyh.com" aria-label="Email"><i class="fas fa-envelope"></i></a>
+        <a href="https://github.com/ryhox" target="_blank" aria-label="GitHub"><i class="fab fa-github"></i></a>
+        <a href="https://discordapp.com/users/Ryhox" target="_blank" aria-label="Discord"><i class="fab fa-discord"></i></a>
+    </div>
+</footer>
+
+<script src="/assets/js/maincharacter.js"></script>
+</body>
+</html>

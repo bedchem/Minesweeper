@@ -29,10 +29,10 @@ document.addEventListener('DOMContentLoaded', function () {
     return { ok: response.ok, status: response.status, data };
   }
 
-  function setAvatar(url) {
-    if (profileAvatarPreview) profileAvatarPreview.src = url;
-    if (headerAvatar) { headerAvatar.src = url; headerAvatar.style.display = 'inline-block'; }
-    if (dropdownAvatar) { dropdownAvatar.src = url; dropdownAvatar.style.display = 'inline-block'; }
+  function setAvatar(uid) {
+    Avatars.bind(profileAvatarPreview, uid);
+    if (headerAvatar) { Avatars.bind(headerAvatar, uid); headerAvatar.style.display = 'inline-block'; }
+    if (dropdownAvatar) { Avatars.bind(dropdownAvatar, uid); dropdownAvatar.style.display = 'inline-block'; }
   }
 
   function maskEmail(email) {
@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusText.textContent = `Member since: ${memberSince}`;
     usernameSpan.textContent = displayName;
     usernameInput.value = displayName;
-    setAvatar(`/avatar/${encodeURIComponent(user.uid)}?v=${Date.now()}`);
+    setAvatar(user.uid);
     emailElem.textContent = maskEmail(user.email);
     logoutBtn.style.display = 'inline-block';
     deleteBtn.style.display = 'inline-block';
@@ -215,10 +215,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
     try {
       const { ok, data } = await apiPost('/api/uploadProfilePic', { image: dataUrl });
-      if (!ok) return showErrorAlert(data.error || 'Upload failed');
-      setAvatar(`${data.url}?v=${Date.now()}`);
+      if (!ok) {
+        setAvatar(auth.currentUser?.uid);
+        return showErrorAlert(data.error || 'Upload failed');
+      }
+      const uid = auth.currentUser.uid;
+      // swaps every picture of this user on the page and in this browser's other tabs (the server tells everyone else)
+      Avatars.update(uid, data.avatarVersion, { broadcast: true });
+      Avatars.setOwn(uid, data.avatarVersion);
       showSuccessAlert('Profile picture updated');
     } catch (err) {
+      setAvatar(auth.currentUser?.uid);
       showErrorAlert('Upload failed: ' + err.message);
     }
   });

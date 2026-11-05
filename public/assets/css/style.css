@@ -3129,10 +3129,110 @@ width: 250px;
 }
 
 .chatheader {
+  position: relative;
   border-bottom: 1px solid rgba(82, 82, 82, 0.5);
   background: rgba(25, 27, 31, 0.6);
   border-radius: 10px 10px 0 0;
   margin-bottom: 1px;
+}
+
+/* Phones: the chat is a button that opens it fullscreen */
+.chat-toggle,
+.chat-close {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .chat-toggle {
+    position: fixed;
+    bottom: 1rem;
+    left: 1rem;
+    z-index: 1000;
+    width: 52px;
+    height: 52px;
+    border: none;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #007AFF 0%, #5856D6 100%);
+    color: #fff;
+    font-size: 1.4em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    transition: transform 0.18s;
+  }
+
+  .chat-toggle:active {
+    transform: scale(0.95);
+  }
+
+  .chat-unread {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    background: #ff4444;
+    color: #fff;
+    font-size: 0.7rem;
+    line-height: 20px;
+    text-align: center;
+  }
+
+  .chat-unread[hidden] {
+    display: none;
+  }
+
+  .chat-container {
+    display: none;
+  }
+
+  .chat-container.open {
+    display: flex;
+    flex-direction: column;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+    box-sizing: border-box;
+    background: #121212;
+    z-index: 2500;
+  }
+
+  .chat-container.open .messages-container {
+    flex: 1;
+    max-height: none;
+  }
+
+  .chat-close {
+    display: flex;
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: #8E8E93;
+    font-size: 1.4em;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  body.chat-open {
+    overflow: hidden;
+  }
 }
 
 /* Game Effects */

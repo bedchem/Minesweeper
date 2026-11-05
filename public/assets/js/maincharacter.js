@@ -24,26 +24,57 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  function showName(name) {
+    dropdownEmail.textContent = name || '';
+    const myStatsBtn = document.getElementById('myStatsBtn');
+    if (myStatsBtn && name) {
+      myStatsBtn.style.display = 'inline-block';
+      myStatsBtn.onclick = () => {
+        window.location.href = `/stats/${encodeURIComponent(name)}`;
+      };
+    }
+  }
+
+  function showAvatar(user) {
+    for (const img of [headerAvatar, dropdownAvatar]) {
+      if (!img) continue;
+      Avatars.bind(img, user.uid);
+      img.style.display = 'inline-block';
+    }
+  }
+
+  // the server knows the current picture version and username (it may have been renamed, e.g. by an admin)
+  async function syncAccount(user) {
+    try {
+      const response = await fetch('/api/getUser', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await user.getIdToken()}` }
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      Avatars.setOwn(user.uid, data.avatarVersion);
+      if (data.username && data.username !== user.displayName) {
+        await user.updateProfile({ displayName: data.username });
+        showName(data.username);
+      }
+    } catch (err) {
+      console.error('Could not load account data:', err);
+    }
+  }
+
   firebase.auth().onAuthStateChanged(function (user) {
     if (!user) return showSignedOut();
 
     userIcon.style.display = 'flex';
     signInBtn.style.display = 'none';
-    dropdownEmail.textContent = user.displayName || '';
+    showName(user.displayName);
 
-    const myStatsBtn = document.getElementById('myStatsBtn');
-    if (myStatsBtn && user.displayName) {
-      myStatsBtn.style.display = 'inline-block';
-      myStatsBtn.onclick = () => {
-        window.location.href = `/stats/${encodeURIComponent(user.displayName)}`;
-      };
-    }
-
-    const avatar = `/avatar/${encodeURIComponent(user.uid)}`;
-    for (const img of [headerAvatar, dropdownAvatar]) {
-      if (!img) continue;
-      img.src = avatar;
-      img.style.display = 'inline-block';
+    // with a known version the picture comes straight from the cache; otherwise wait for it, so it loads once
+    if (Avatars.known(user.uid)) {
+      showAvatar(user);
+      syncAccount(user);
+    } else {
+      syncAccount(user).finally(() => showAvatar(user));
     }
   });
 

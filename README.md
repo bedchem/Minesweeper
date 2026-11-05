@@ -32,7 +32,7 @@ A sleek, real-time **Multiplayer Minesweeper** game built for the web — featur
 
 ## 🚀 Try it now
 
-👉 [Play Online](https://minesweeper.nexorhub.com/)
+👉 [Play Online](https://minesweeper.plattnericus.dev/)
 
 Or run it locally:
 
@@ -45,8 +45,8 @@ npm start
 
 You need **Node.js 22+** and a Firebase project:
 
-- `firebaseServiceAccount.json` in the root folder
-- `public/assets/js/firebase-auth.js` with your Firebase web config (`firebase.initializeApp({...})`)
-- optional `.env`: `PORT`, `ADMIN_UIDS`, `RECAPTCHA_SECRET_LOGIN`, `RECAPTCHA_SECRET_REGISTER`, `TRUST_PROXY`, `CSP_EXTRA_FRAME_SRC`
+- `.env` with your Firebase Admin credentials: `FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY` (in double quotes, with `\n` line breaks), from the service account JSON (or a `firebaseServiceAccount.json` in the root folder)
+- `.env` with your Firebase web config: `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_APP_ID`, `FIREBASE_MEASUREMENT_ID` (or a static `public/assets/js/firebase-auth.js` with `firebase.initializeApp({...})`)
+- optional `.env`: `PORT`, `ADMIN_UIDS`, `RECAPTCHA_SITE_KEY`, `RECAPTCHA_SECRET_KEY` (reCAPTCHA v2 checkbox, used for login and register; captcha is skipped when empty), `TRUST_PROXY`, `CSP_EXTRA_FRAME_SRC`
 
 Admin: put your uid in `ADMIN_UIDS` or set `"role": "admin"` in your file in `userDATA/`.

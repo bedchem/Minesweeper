@@ -18,6 +18,44 @@ document.addEventListener('DOMContentLoaded', () => {
   messageInput.disabled = true;
   sendButton.disabled = true;
 
+  // phones: the chat is a button that opens it fullscreen
+  const chatContainer = document.getElementById('lobbyChat');
+  const chatToggle = document.getElementById('chatToggle');
+  const chatClose = document.getElementById('chatClose');
+  const chatUnread = document.getElementById('chatUnread');
+  const phoneLayout = window.matchMedia('(max-width: 767px)');
+  let unread = 0;
+  // the history is replayed on every (re)join and must not count as unread
+  let historyLoaded = false;
+
+  const chatHidden = () => phoneLayout.matches && !chatContainer.classList.contains('open');
+
+  function showUnread() {
+    chatUnread.hidden = unread === 0;
+    chatUnread.textContent = unread > 99 ? '99+' : String(unread);
+  }
+
+  function setChatOpen(open) {
+    chatContainer.classList.toggle('open', open);
+    document.body.classList.toggle('chat-open', open);
+    chatToggle.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    unread = 0;
+    showUnread();
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    if (!messageInput.disabled) messageInput.focus();
+  }
+
+  chatToggle.addEventListener('click', () => setChatOpen(true));
+  chatClose.addEventListener('click', () => setChatOpen(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && chatContainer.classList.contains('open')) setChatOpen(false);
+  });
+  // turning the phone (or resizing) into the desktop layout must not leave the page scroll-locked
+  phoneLayout.addEventListener('change', () => {
+    if (!phoneLayout.matches) setChatOpen(false);
+  });
+
   function setStatus(text, state) {
     connectionStatus.textContent = text;
     connectionStatus.className = `connection-status ${state}`;
@@ -99,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     row.style.cssText = `display:flex;align-items:flex-start;${isOwn ? 'justify-content:flex-end;' : ''}`;
     const avatar = document.createElement('img');
     avatar.className = 'chat-avatar';
-    avatar.src = data.uid ? `/avatar/${encodeURIComponent(data.uid)}` : '/assets/images/icon.png';
+    Avatars.bind(avatar, data.uid, data.avatar);
     avatar.alt = 'avatar';
     avatar.style.cssText = 'width:32px;height:32px;border-radius:50%;object-fit:cover;margin-right:8px;';
 
@@ -186,6 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function joinChat() {
+    historyLoaded = false;
     setStatus('Connected', 'connected');
     messagesContainer.replaceChildren(loadingMessage);
     loadingMessage.style.display = '';
@@ -198,13 +237,21 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on('lobbyChatJoined', () => {
     messageInput.disabled = false;
     sendButton.disabled = false;
-    messageInput.focus();
+    // on phones a focused input would pop up the keyboard over a closed chat
+    if (!chatHidden()) messageInput.focus();
     loadingMessage.style.display = 'none';
+    historyLoaded = true;
   });
 
   socket.on('lobbyChatMessage', (data) => {
     messagesContainer.append(renderMessage(data));
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    // only new messages from others count, not the history replayed on join
+    const fromOther = data.type !== 'system' && data.uid !== (myId || firebase.auth().currentUser?.uid);
+    if (historyLoaded && fromOther && chatHidden()) {
+      unread++;
+      showUnread();
+    }
   });
 
   socket.on('lobbyChatError', showError);

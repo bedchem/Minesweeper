@@ -44,9 +44,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function populateStats(stats) {
         document.getElementById('profileUsername').textContent = stats.username || profileUsername;
-        document.getElementById('profileAvatar').src = stats.uid
-            ? `/avatar/${encodeURIComponent(stats.uid)}`
-            : '/assets/images/icon.png';
+        document.title = `${stats.username || profileUsername} – Statistiken | Minesweeper Multiplayer`;
+        Avatars.bind(document.getElementById('profileAvatar'), stats.uid, stats.avatarVersion);
 
         const fill = (sectionId, data, keys) => {
             document.querySelectorAll(`#${sectionId} .info-value`).forEach((el, index) => {

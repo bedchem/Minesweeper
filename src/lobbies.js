@@ -55,8 +55,18 @@ class LobbyManager {
     }
   }
 
+  #avatarVersion(uid) {
+    return this.userStore.get(uid)?.avatarVersion ?? 0;
+  }
+
   #usersForClient(lobby) {
-    return [...lobby.members.values()].map(m => ({ id: m.uid, uid: m.uid, name: m.name, ready: m.ready }));
+    return [...lobby.members.values()].map(m => ({
+      id: m.uid,
+      uid: m.uid,
+      name: m.name,
+      ready: m.ready,
+      avatar: this.#avatarVersion(m.uid)
+    }));
   }
 
   #broadcastUsers(lobby) {
@@ -697,7 +707,13 @@ class LobbyManager {
     if (!message) return;
     if (!this.#chatLimiter.allow(socket.data.uid)) return socket.emit('lobbyChatError', 'You are sending messages too fast');
 
-    const entry = { username: socket.data.name, uid: socket.data.uid, message, timestamp: Date.now() };
+    const entry = {
+      username: socket.data.name,
+      uid: socket.data.uid,
+      avatar: this.#avatarVersion(socket.data.uid),
+      message,
+      timestamp: Date.now()
+    };
     lobby.chat.push(entry);
     if (lobby.chat.length > CHAT_HISTORY) lobby.chat.shift();
     this.io.to(`chat:${code}`).emit('lobbyChatMessage', entry);

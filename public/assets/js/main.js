@@ -55,7 +55,7 @@ const isLobbyCreationPage = /^\/lobbycreation(\.html)?\/?$/.test(window.location
 const isLobbyPage = window.location.pathname.startsWith('/lobby/');
 
 const validateCode = (code) => /^[A-Z0-9]{4}$/.test(code);
-const avatarUrl = (uid) => (uid ? `/avatar/${encodeURIComponent(uid)}` : '/assets/images/icon.png');
+Avatars.listen(socket);
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -318,8 +318,7 @@ function updatePlayerList(users) {
     list.replaceChildren(...users.map((user) => {
       const item = el('li', user.ready ? 'ready' : '');
       item.dataset.id = user.id;
-      const avatar = el('img', 'player-avatar');
-      avatar.src = avatarUrl(user.uid);
+      const avatar = Avatars.bind(el('img', 'player-avatar'), user.uid, user.avatar);
       avatar.alt = 'avatar';
       item.append(avatar, el('span', 'player-name-text', user.name));
       if (user.ready) item.append('✅');
@@ -861,7 +860,7 @@ function createPodiumTier(player) {
         <div class="player-stats">
           <span>${Number(player.progress)}%</span>
           <br>
-          <span>${Number(player.time)} s</span>
+          <span>${Number(player.penalty ? player.baseTime ?? player.time - player.penalty : player.time)} s</span>
           ${player.penalty ? `<span class="penalty">+${Number(player.penalty)}</span>` : ''}
         </div>
       </div>

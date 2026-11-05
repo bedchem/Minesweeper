@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const avatar = document.createElement('img');
             avatar.className = 'leaderboard-avatar';
             avatar.alt = 'avatar';
-            avatar.src = player.uid ? `/avatar/${encodeURIComponent(player.uid)}` : '/assets/images/icon.png';
+            Avatars.bind(avatar, player.uid, player.avatarVersion);
 
             const row = document.createElement('a');
             row.className = 'leaderboard-row';

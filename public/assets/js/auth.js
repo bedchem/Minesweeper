@@ -26,21 +26,56 @@ document.addEventListener('DOMContentLoaded', function () {
     return { ok: response.ok, status: response.status, data };
   }
 
+  // the site key comes from the server (.env); without one the captcha is off and Google's script isn't loaded
+  const captchaBox = document.querySelector('.g-recaptcha');
+  let captchaWidget = null;
+
+  function loadRecaptcha() {
+    return new Promise((resolve, reject) => {
+      window.onRecaptchaLoad = () => resolve(window.grecaptcha);
+      const script = document.createElement('script');
+      script.src = 'https://www.google.com/recaptcha/api.js?render=explicit&onload=onRecaptchaLoad';
+      script.async = true;
+      script.onerror = () => reject(new Error('reCAPTCHA script could not be loaded'));
+      document.head.append(script);
+    });
+  }
+
+  // resolves to whether a captcha is required
+  const captchaRequired = fetch('/api/captchaConfig')
+    .then((r) => (r.ok ? r.json() : {}))
+    .catch(() => ({}))
+    .then(async ({ siteKey }) => {
+      if (!siteKey || !captchaBox) {
+        if (captchaBox) captchaBox.style.display = 'none';
+        return false;
+      }
+      try {
+        const recaptcha = await loadRecaptcha();
+        captchaWidget = recaptcha.render(captchaBox, { sitekey: siteKey, theme: 'dark' });
+      } catch (err) {
+        // blocked (e.g. by an ad blocker): still required, captchaToken() tells the user
+        console.error('Captcha failed to load:', err);
+      }
+      return true;
+    });
+
   function resetCaptcha() {
-    if (typeof grecaptcha !== 'undefined') grecaptcha.reset();
+    if (captchaWidget !== null) grecaptcha.reset(captchaWidget);
   }
 
   function captchaToken() {
-    if (typeof grecaptcha === 'undefined') {
+    if (captchaWidget === null) {
       showCustomAlert('Captcha konnte nicht geladen werden', 'error');
       return null;
     }
-    const token = grecaptcha.getResponse();
+    const token = grecaptcha.getResponse(captchaWidget);
     if (!token) showCustomAlert('Bitte löse das Captcha', 'error');
     return token || null;
   }
 
   async function verifyCaptcha(action) {
+    if (!(await captchaRequired)) return true;
     const token = captchaToken();
     if (!token) return false;
     const { ok, data } = await apiPost('/recaptcha', { token, action });
@@ -164,8 +199,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const check = await apiPost('/api/checkUsername', { username });
     if (check.data.exists) return showCustomAlert('Benutzername ist bereits vergeben', 'error');
     // the token is single use, the server checks it when the account is created
-    const captcha = captchaToken();
-    if (!captcha) return;
+    let captcha = null;
+    if (await captchaRequired) {
+      captcha = captchaToken();
+      if (!captcha) return;
+    }
 
     let user;
     try {

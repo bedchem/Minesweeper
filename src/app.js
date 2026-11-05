@@ -82,6 +82,13 @@ function createApp({ config, userStore, firebaseAuth, logger = console }) {
   app.use('/api/admin', createAdminRouter(ctx));
 
   const page = name => (req, res) => res.sendFile(path.join(config.publicDir, name));
+  app.get('/assets/js/firebase-auth.js', (req, res, next) => {
+    // without FIREBASE_API_KEY, fall back to a static public/assets/js/firebase-auth.js
+    if (!config.firebaseWeb.apiKey) return next();
+    const web = Object.fromEntries(Object.entries(config.firebaseWeb).filter(([, v]) => v));
+    res.type('application/javascript').set('Cache-Control', 'no-cache')
+      .send(`firebase.initializeApp(${JSON.stringify(web)});\n`);
+  });
   app.get('/favicon.ico', page('assets/images/minesweeperlogo.png'));
   app.get('/lobby', (req, res) => res.redirect('/lobbycreation'));
   app.get('/lobby/:code', page('lobby.html'));

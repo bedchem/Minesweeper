@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>inGame</title>
+    <meta name="robots" content="noindex">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha384-nRgPTkuX86pH8yjPJUAFuASXQSSl2/bBUiNV47vSYpKFxHJhbcrGnmlYpYJMeD7a" crossorigin="anonymous">
   <link rel="stylesheet" href="/assets/css/style.css">
   <link rel="icon" type="image/png" href="/assets/images/minesweeperlogo.png">
@@ -13,6 +14,7 @@
   <script src="/assets/js/main.js" defer></script>
 <script src="/assets/js/cookies.js"></script>
 <script src="/assets/js/alert.js"></script>
+<script src="/assets/js/avatars.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.js" integrity="sha384-xLPjH6nqG4p/2mu1KJ1t+4KqcvkyXVwBucQtyGK65lDNfKzECxGY/QEYWR+Wompr" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cookieconsent@3.1.1/build/cookieconsent.min.css" integrity="sha384-nA7usz4cMKo7RylsCZnpe0V9qx5X7sa011o0OrDzrKUE7Ero1gB48Fjaw6SFxVZe" crossorigin="anonymous">
 
@@ -67,8 +69,12 @@
 
   </div>
   </div>
-<div class="chat-container">
-      <div class="chatheader">chat</div>
+<button class="chat-toggle" id="chatToggle" aria-label="Open chat" aria-controls="lobbyChat" aria-expanded="false">
+  <i class="fa-solid fa-comments"></i>
+  <span class="chat-unread" id="chatUnread" hidden></span>
+</button>
+<div class="chat-container" id="lobbyChat">
+      <div class="chatheader">chat<button class="chat-close" id="chatClose" aria-label="Close chat"><i class="fa-solid fa-xmark"></i></button></div>
 
     <div class="connection-status" id="connection-status" >Connecting...</div>
   <div class="messages-container" id="messages-container">
